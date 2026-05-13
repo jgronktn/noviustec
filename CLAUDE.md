@@ -56,19 +56,41 @@ Postmark Inbound Parse
 ## Repository structure
 noviustec/
 ├── CLAUDE.md                  ← this file
-├── README.md
-├── .gitignore
+├── .gitignore                 (ignores node_modules, inbound-log, companies, .env)
 ├── backend/
 │   ├── server.js              ← main Fastify entry point
 │   ├── package.json
-│   └── inbound-log/           ← gitignored; saved Postmark payloads
+│   ├── package-lock.json
+│   ├── .env                   ← gitignored; ANTHROPIC_API_KEY, POSTMARK_TOKEN
+│   ├── inbound-log/           ← gitignored; saved Postmark payloads + -parsed.json sidecars
+│   ├── companies/             ← gitignored; per-company ledger files
+│   │   └── default/
+│   │       └── ledger.xlsx    ← Excel workbook (Categories, Sources, PendingInbox, GL)
+│   ├── src/
+│   │   ├── parser/            ← receipt parser (Haiku 4.5 vision)
+│   │   │   ├── index.js
+│   │   │   ├── triage.js
+│   │   │   ├── normalize.js
+│   │   │   ├── inline-html.js
+│   │   │   ├── prompts.js
+│   │   │   ├── schema.js
+│   │   │   └── claude.js
+│   │   └── ledger/            ← exceljs-backed ledger workbook
+│   │       ├── index.js
+│   │       ├── workbook.js
+│   │       ├── schema.js
+│   │       ├── categories.js
+│   │       ├── sources.js
+│   │       ├── pending.js
+│   │       └── transactions.js
+│   └── scripts/
+│       ├── parse-fixtures.js  ← run parser against backend/inbound-log/
+│       ├── init-ledger.js     ← create the workbook with seeded categories
+│       └── inspect-ledger.js  ← dump current ledger state
 ├── frontend/
-│   └── index.html             ← current frontend (plain HTML/JS)
-├── docs/
-│   └── decisions.md           ← log of decisions and rationale
-└── scripts/
-├── deploy-backend.sh
-└── deploy-frontend.sh
+│   └── index.html             ← current frontend (plain HTML/JS; Vue 3 + Vite planned)
+└── docs/
+    └── decisions.md           ← log of architectural decisions and rationale
 
 ## Stack and conventions
 
@@ -105,7 +127,9 @@ These are settled. Don't relitigate without strong reason; see
   meaningful tools (`qbo_get_pnl`, `add_transaction`) rather than generic
   query primitives. Prevents hallucinated field names and uncontrolled cost.
 - **Per-user sandboxing.** Each company's files live under
-  `/var/app/companies/{companyId}/` with strict path validation.
+  `backend/companies/{companyId}/` (resolved relative to the deployed
+  backend directory — `/home/noviustec/backend/companies/...` in
+  production). Strict path validation via a `resolveSafe()` helper.
 - **Native tools, not MCP.** Filesystem and ledger operations are implemented
   as native Anthropic tool definitions inside the Node process. MCP would
   add subprocess overhead and complicate sandboxing.
@@ -135,9 +159,26 @@ When writing code in this repo:
 
 - Code lives on the developer's laptop in this monorepo (under `~/code/noviustec/`)
 - Develop locally, commit to git, push to GitHub
-- Deploy via `scripts/deploy-backend.sh` (rsync + systemctl restart)
-- Deploy frontend via `scripts/deploy-frontend.sh`
+- Server deploys from GitHub via `git pull` in `/home/noviustec/` followed
+  by `npm install` (if deps changed) and `sudo systemctl restart noviustec-api`
 - Never edit files directly on the server (`api.noviustec.com`)
+- The `scripts/deploy-backend.sh` and `scripts/deploy-frontend.sh` scripts
+  mentioned in earlier plans were never created — current process is the
+  manual git-pull flow described above
+
+### Server layout
+
+The server mirrors the laptop's layout: just as `~/code/noviustec/` is the
+repo root locally, `/home/noviustec/` is the repo root on the server (cloned
+directly into the `noviustec` user's home directory).
+
+- **Repo root on server**: `/home/noviustec/`
+- **Backend working dir**: `/home/noviustec/backend/`
+- **Backend env file**: `/home/noviustec/backend/.env` (loaded by systemd via `EnvironmentFile=`)
+- **Ledger location**: `/home/noviustec/backend/companies/default/ledger.xlsx` (not in git)
+- **Inbound log**: `/home/noviustec/backend/inbound-log/` (not in git)
+- **systemd service**: `noviustec-api`
+- **SSH user**: `noviustec@api.noviustec.com`
 
 ### Useful commands
 
@@ -148,11 +189,13 @@ cd backend && node server.js
 # Run backend in watch mode
 cd backend && node --watch server.js
 
-# Deploy backend
-./scripts/deploy-backend.sh
-
-# Deploy frontend
-./scripts/deploy-frontend.sh
+# Deploy: pull on server, install if package.json changed, restart
+ssh noviustec@api.noviustec.com '
+  cd /home/noviustec &&
+  git pull &&
+  cd backend && npm install &&
+  sudo systemctl restart noviustec-api
+'
 
 # SSH to server
 ssh noviustec@api.noviustec.com
@@ -162,6 +205,9 @@ ssh noviustec@api.noviustec.com 'sudo journalctl -u noviustec-api -f'
 
 # Restart backend service
 ssh noviustec@api.noviustec.com 'sudo systemctl restart noviustec-api'
+
+# Inspect the production ledger (read-only)
+ssh noviustec@api.noviustec.com 'cd /home/noviustec/backend && npm run inspect-ledger'
 ```
 
 ## Files of note
