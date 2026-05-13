@@ -1,0 +1,119 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>Noviustec — Inbox</title>
+  <style>
+    body { 
+      font-family: system-ui, -apple-system, sans-serif; 
+      padding: 2rem; 
+      max-width: 900px; 
+      margin: 0 auto; 
+      color: #222;
+    }
+    h1 { font-weight: 600; margin-bottom: 0.5rem; }
+    .subtitle { color: #666; margin-bottom: 2rem; }
+    table { width: 100%; border-collapse: collapse; }
+    th, td { 
+      text-align: left; 
+      padding: 0.75rem; 
+      border-bottom: 1px solid #eee; 
+      font-size: 0.9rem;
+    }
+    th { 
+      background: #f8f8f8; 
+      font-weight: 600; 
+      text-transform: uppercase; 
+      font-size: 0.75rem; 
+      color: #555;
+      letter-spacing: 0.05em;
+    }
+    tr:hover { background: #fafafa; }
+    .attachments { 
+      display: inline-block; 
+      padding: 0.15rem 0.5rem; 
+      border-radius: 10px; 
+      background: #e7f3ff; 
+      color: #0066cc;
+      font-size: 0.8rem;
+    }
+    .attachments.zero { background: #f0f0f0; color: #999; }
+    .empty { 
+      text-align: center; 
+      padding: 3rem; 
+      color: #999; 
+      background: #fafafa; 
+      border-radius: 8px;
+    }
+    .loading { color: #999; }
+  </style>
+</head>
+<body>
+  <h1>Inbox</h1>
+  <p class="subtitle">Emails received via Postmark</p>
+  
+  <div id="content" class="loading">Loading...</div>
+
+  <script>
+    const API_URL = "https://api.noviustec.com";
+    
+    async function loadInbox() {
+      const container = document.getElementById("content");
+      try {
+        const res = await fetch(`${API_URL}/api/inbox`);
+        const data = await res.json();
+        
+        if (data.emails.length === 0) {
+          container.innerHTML = '<div class="empty">No emails yet. Forward something to your Postmark address to see it appear here.</div>';
+          return;
+        }
+        
+        const rows = data.emails.map(e => `
+          <tr>
+            <td>${formatDate(e.received_at)}</td>
+            <td>${escape(e.from || "(unknown)")}</td>
+            <td>${escape(e.subject || "(no subject)")}</td>
+            <td>
+              <span class="attachments ${e.attachment_count === 0 ? 'zero' : ''}">
+                ${e.attachment_count} file${e.attachment_count === 1 ? '' : 's'}
+              </span>
+            </td>
+          </tr>
+        `).join("");
+        
+        container.innerHTML = `
+          <table>
+            <thead>
+              <tr>
+                <th>Received</th>
+                <th>From</th>
+                <th>Subject</th>
+                <th>Attachments</th>
+              </tr>
+            </thead>
+            <tbody>${rows}</tbody>
+          </table>
+        `;
+      } catch (err) {
+        container.innerHTML = `<div class="empty">Error: ${err.message}</div>`;
+      }
+    }
+    
+    function escape(s) {
+      const div = document.createElement("div");
+      div.textContent = s;
+      return div.innerHTML;
+    }
+    
+    function formatDate(iso) {
+      const d = new Date(iso);
+      return d.toLocaleString();
+    }
+    
+    loadInbox();
+    
+    // Auto-refresh every 10 seconds so new emails appear without manual reload
+    setInterval(loadInbox, 10000);
+  </script>
+</body>
+</html>
