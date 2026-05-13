@@ -1,5 +1,6 @@
 node_modules/
 inbound-log/
+companies/
 .env
 *.log
 .DS_Store
