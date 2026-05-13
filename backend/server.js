@@ -53,37 +53,13 @@ app.get("/health", async () => ({
   node_version: process.version,
 }));
 
-app.get("/api/inbox", async () => {
-  const dir = LOG_DIR;
-  const files = await fs.readdir(dir);
-
-  const entries = await Promise.all(
-    files
-      .filter(f => f.endsWith(".json") && !f.endsWith("-meta.json") && !f.endsWith("-parsed.json"))
-      .map(async (filename) => {
-        const filepath = path.join(dir, filename);
-        const stat = await fs.stat(filepath);
-        
-        // Read just the metadata fields, not the whole payload
-        const content = await fs.readFile(filepath, "utf-8");
-        const data = JSON.parse(content);
-        
-        return {
-          filename,
-          received_at: stat.mtime.toISOString(),
-          from: data.From,
-          subject: data.Subject,
-          attachment_count: data.Attachments?.length ?? 0,
-          size_bytes: stat.size,
-        };
-      })
-  );
-  
-  // Most recent first
-  entries.sort((a, b) => b.received_at.localeCompare(a.received_at));
-  
-  return { count: entries.length, emails: entries };
-});
+// ────────────────────────────────────────────────────────────────────────────
+// /api/* routes (auth-gated via bearer token). Registered as a Fastify
+// plugin so the auth preHandler is scoped to /api/* only — /webhooks/* and
+// /health stay open.
+// ────────────────────────────────────────────────────────────────────────────
+const { default: apiRoutes } = await import("./src/api/routes.js");
+await app.register(apiRoutes, { logDir: LOG_DIR });
 
 // ────────────────────────────────────────────────────────────────────────────
 // Echo endpoint — verifies that nginx is forwarding headers correctly
