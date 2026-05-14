@@ -75,6 +75,37 @@ export async function openTransactionDocument(token, txnId) {
   return openDocumentBlob(token, `/api/documents/transaction/${encodeURIComponent(txnId)}`);
 }
 
+/**
+ * Fetch an authenticated download (PDF / image / xlsx) and trigger a
+ * Save-As dialog with the provided filename. Works cross-origin because
+ * the blob is created from in-memory bytes, sidestepping the same-origin
+ * limit on the native <a download> attribute.
+ */
+export async function downloadFile(token, apiPath, filename) {
+  const res = await fetch(`${BASE_URL}${apiPath}`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!res.ok) {
+    let msg = `HTTP ${res.status}`;
+    try {
+      const data = await res.json();
+      msg = data.error || msg;
+    } catch {}
+    throw new Error(msg);
+  }
+  const blob = await res.blob();
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename || "download";
+  a.style.display = "none";
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  // Revoke a bit later so the browser has time to start the download.
+  setTimeout(() => URL.revokeObjectURL(url), 60_000);
+}
+
 async function openDocumentBlob(token, path) {
   const res = await fetch(`${BASE_URL}${path}`, {
     headers: { Authorization: `Bearer ${token}` },

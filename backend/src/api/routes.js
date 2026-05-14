@@ -16,6 +16,8 @@ import {
   updatePendingStatus,
   updatePendingFromParse,
   addTransaction,
+  getLedgerPath,
+  getDocument,
 } from "../ledger/index.js";
 import { parseReceipt } from "../parser/index.js";
 import {
@@ -653,6 +655,63 @@ export default async function apiRoutes(fastify, opts) {
         .send(buffer);
     } catch {
       return reply.code(404).send({ error: "Document file missing on disk" });
+    }
+  });
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // GET /api/documents/by-id/:doc_id — stream an archived document by its
+  // Documents-sheet ID. Used by the dashboard file browser, which deals in
+  // doc IDs rather than txn IDs (a single txn can have multiple docs).
+  // ─────────────────────────────────────────────────────────────────────────
+  fastify.get("/api/documents/by-id/:doc_id", async (req, reply) => {
+    const doc = await getDocument(req.params.doc_id);
+    if (!doc) return reply.code(404).send({ error: "Document not found" });
+    if (!doc.document_path) {
+      return reply.code(404).send({ error: "Document has no archived path" });
+    }
+    const absolute = resolveDocumentPath({
+      companyId: COMPANY_ID,
+      documentPath: doc.document_path,
+    });
+    if (!absolute) return reply.code(400).send({ error: "Invalid document path" });
+
+    try {
+      const buffer = await fs.readFile(absolute);
+      const ext = path.extname(absolute).slice(1).toLowerCase();
+      const mime = MIME_BY_EXT[ext] || "application/octet-stream";
+      reply
+        .header("Content-Type", mime)
+        .header(
+          "Content-Disposition",
+          `inline; filename="${path.basename(absolute)}"`,
+        )
+        .send(buffer);
+    } catch {
+      return reply.code(404).send({ error: "Document file missing on disk" });
+    }
+  });
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // GET /api/files/ledger — download the active company's ledger workbook.
+  // The file lives outside the documents/ tree so it gets its own route.
+  // ─────────────────────────────────────────────────────────────────────────
+  fastify.get("/api/files/ledger", async (req, reply) => {
+    const ledgerPath = getLedgerPath();
+    try {
+      const buffer = await fs.readFile(ledgerPath);
+      reply
+        .header(
+          "Content-Type",
+          "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        )
+        .header(
+          "Content-Disposition",
+          `attachment; filename="${path.basename(ledgerPath)}"`,
+        )
+        .send(buffer);
+    } catch (err) {
+      req.log.error({ err: err.message, ledgerPath }, "ledger read failed");
+      return reply.code(404).send({ error: "Ledger workbook not found" });
     }
   });
 

@@ -201,6 +201,51 @@ export const TOOL_DEFINITIONS = [
     },
   },
   {
+    name: "show_file_list",
+    description:
+      "Render a downloadable list of archived files in the dashboard (PDFs and images attached to receipts, invoices, etc., plus the ledger workbook itself). The panel lets the user download individual files or select multiple and download them in bulk. Filter by reference_kind (invoice, receipt, order, transaction, confirmation, other), or use kind='ledger' to surface just the ledger workbook, or omit kind to include everything.",
+    input_schema: {
+      type: "object",
+      properties: {
+        kind: {
+          type: "string",
+          enum: [
+            "invoice",
+            "receipt",
+            "order",
+            "transaction",
+            "confirmation",
+            "other",
+            "ledger",
+            "all",
+          ],
+          description:
+            "Filter to a document kind, or 'ledger' for the workbook only, or 'all' (default) to include the ledger plus every document.",
+        },
+        vendor: {
+          type: "string",
+          description: "Filter to a single vendor (exact match).",
+        },
+        from: {
+          type: "string",
+          description: "Inclusive start date in YYYY-MM-DD format.",
+        },
+        to: {
+          type: "string",
+          description: "Inclusive end date in YYYY-MM-DD format.",
+        },
+        limit: {
+          type: "integer",
+          description: "Cap to most recent N documents. Default 100.",
+        },
+        title: {
+          type: "string",
+          description: "Optional title.",
+        },
+      },
+    },
+  },
+  {
     name: "show_inbox_list",
     description:
       "Render a table of all items received in the inbox (receipts that arrived via email or upload). Shows pending, approved, and rejected entries together so the user can see the full history of what's come in. Default returns all statuses, newest first. Cap at 100 rows.",

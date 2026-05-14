@@ -1,5 +1,5 @@
 <script setup>
-import { ref } from "vue";
+import { ref, provide } from "vue";
 import TokenGate from "./components/TokenGate.vue";
 import InboxPanel from "./components/InboxPanel.vue";
 import PromptPanel from "./components/PromptPanel.vue";
@@ -16,6 +16,11 @@ const STORAGE_KEY = "noviustec_token";
 const token = ref(localStorage.getItem(STORAGE_KEY) || "");
 const selectedPendingId = ref(null);
 const inboxKey = ref(0); // bump to force InboxPanel reload after approve/reject
+
+// Expose the token to deeply-nested canvas panels (e.g. FileListPanel
+// download buttons) without prop-drilling. Provide the ref itself so
+// updates propagate after sign-in / sign-out.
+provide("apiToken", token);
 
 // Agent-pushed canvas panels. Newest on top. Persists across review-panel
 // toggles — agent panels stay parked while the user reviews a pending row.

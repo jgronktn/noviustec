@@ -4,6 +4,7 @@
 // light post-processing (date → ISO string, group-by for P&L, scrub
 // filesystem paths). Returns plain JSON-serializable objects.
 
+import * as path from "node:path";
 import {
   listPending,
   listTransactions,
@@ -11,6 +12,7 @@ import {
   getCategories,
   getPaymentSources,
   listDocuments,
+  getLedgerPath,
 } from "../ledger/index.js";
 
 function isoDate(v) {
@@ -268,6 +270,115 @@ export async function runTool(name, input) {
         },
         count: entries.length,
         total_outstanding: Math.round(total_outstanding * 100) / 100,
+      };
+    }
+
+    case "show_file_list": {
+      const kindFilter = args.kind ?? "all";
+      const wantLedger = kindFilter === "ledger" || kindFilter === "all";
+      const wantDocuments = kindFilter !== "ledger";
+
+      const files = [];
+
+      // Pin the ledger workbook at the top when included.
+      if (wantLedger) {
+        const ledgerPath = getLedgerPath();
+        files.push({
+          id: "ledger",
+          kind: "ledger",
+          vendor: null,
+          date: null,
+          reference_number: null,
+          filename: path.basename(ledgerPath),
+          download_path: "/api/files/ledger",
+          download_filename: path.basename(ledgerPath),
+          txn_id: null,
+        });
+      }
+
+      if (wantDocuments) {
+        let docs = await listDocuments();
+        if (kindFilter !== "all") {
+          docs = docs.filter((d) => d.reference_kind === kindFilter);
+        }
+        if (args.vendor) {
+          docs = docs.filter((d) => d.vendor === args.vendor);
+        }
+        if (args.from) {
+          docs = docs.filter(
+            (d) => d.date && new Date(d.date) >= new Date(args.from),
+          );
+        }
+        if (args.to) {
+          docs = docs.filter(
+            (d) => d.date && new Date(d.date) <= new Date(args.to),
+          );
+        }
+        docs.sort((a, b) => {
+          const ad = isoDate(a.date) ?? "";
+          const bd = isoDate(b.date) ?? "";
+          return bd.localeCompare(ad);
+        });
+        const HARD_CAP = 100;
+        const requested = Math.min(
+          Number.isInteger(args.limit) && args.limit > 0
+            ? args.limit
+            : HARD_CAP,
+          HARD_CAP,
+        );
+        const truncated = docs.length > requested;
+        docs = docs.slice(0, requested);
+        for (const d of docs) {
+          files.push({
+            id: d.id,
+            kind: d.reference_kind ?? "other",
+            vendor: d.vendor,
+            date: isoDate(d.date),
+            reference_number: d.reference_number ?? null,
+            filename: d.filename,
+            download_path: `/api/documents/by-id/${encodeURIComponent(d.id)}`,
+            download_filename: d.original_filename || d.filename,
+            txn_id: d.txn_id ?? null,
+            _truncated_hint: truncated, // for summary; per-row no-op
+          });
+        }
+      }
+
+      const docFiles = files.filter((f) => f.kind !== "ledger");
+      const docTruncated = docFiles.some((f) => f._truncated_hint);
+      for (const f of files) delete f._truncated_hint;
+      const counts = files.reduce((acc, f) => {
+        acc[f.kind] = (acc[f.kind] ?? 0) + 1;
+        return acc;
+      }, {});
+
+      const filterParts = [];
+      if (kindFilter !== "all") filterParts.push(`kind=${kindFilter}`);
+      if (args.vendor) filterParts.push(`vendor=${args.vendor}`);
+      if (args.from && args.to)
+        filterParts.push(`${args.from} – ${args.to}`);
+      else if (args.from) filterParts.push(`from ${args.from}`);
+      else if (args.to) filterParts.push(`through ${args.to}`);
+      const filterDesc = filterParts.join(" · ");
+      const title =
+        args.title ??
+        (filterDesc ? `Files · ${filterDesc}` : "Files");
+
+      return {
+        __panel: {
+          kind: "file_list",
+          title,
+          props: {
+            kind_filter: kindFilter,
+            count: files.length,
+            truncated: docTruncated,
+            counts,
+            files,
+          },
+        },
+        count: files.length,
+        truncated: docTruncated,
+        counts,
       };
     }
 
