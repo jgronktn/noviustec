@@ -1,9 +1,12 @@
 <script setup>
-import { ref, onMounted, computed } from "vue";
+import { ref, onMounted } from "vue";
 import { listPending } from "../api.js";
 import UploadCard from "./UploadCard.vue";
 
-const props = defineProps({ token: { type: String, required: true } });
+const props = defineProps({
+  token: { type: String, required: true },
+  selectedId: { type: String, default: null },
+});
 const emit = defineEmits(["open"]);
 
 const status = ref("pending");
@@ -29,8 +32,6 @@ onMounted(load);
 
 function formatDate(iso) {
   if (!iso) return "";
-  // Server stores as ISO timestamp at midnight UTC for the receipt date;
-  // we just want YYYY-MM-DD.
   return new Date(iso).toISOString().slice(0, 10);
 }
 
@@ -49,7 +50,7 @@ function confidenceClass(c) {
 
 <template>
   <section class="inbox">
-    <div class="head">
+    <header class="head">
       <h2>Inbox</h2>
       <div class="controls">
         <select v-model="status" @change="load">
@@ -58,11 +59,11 @@ function confidenceClass(c) {
           <option value="rejected">Rejected</option>
           <option value="all">All</option>
         </select>
-        <button @click="load" :disabled="loading">
-          {{ loading ? "Loading…" : "Refresh" }}
+        <button @click="load" :disabled="loading" class="refresh">
+          {{ loading ? "…" : "↻" }}
         </button>
       </div>
-    </div>
+    </header>
 
     <UploadCard :token="token" @uploaded="load" />
 
@@ -77,7 +78,10 @@ function confidenceClass(c) {
         v-for="e in entries"
         :key="e.id"
         @click="emit('open', e.id)"
-        :class="{ resolved: e.status !== 'pending' }"
+        :class="{
+          resolved: e.status !== 'pending',
+          selected: e.id === selectedId,
+        }"
       >
         <div class="row1">
           <span class="vendor">{{ e.vendor || "(no vendor)" }}</span>
@@ -85,7 +89,10 @@ function confidenceClass(c) {
         </div>
         <div class="row2">
           <span class="date">{{ formatDate(e.date) }}</span>
-          <span class="cat">{{ e.suggested_category || "—" }}</span>
+          <span class="cat" v-if="e.suggested_category">·</span>
+          <span class="cat" v-if="e.suggested_category">
+            {{ e.suggested_category }}
+          </span>
           <span
             v-if="e.confidence != null"
             class="conf"
@@ -102,44 +109,55 @@ function confidenceClass(c) {
 
 <style scoped>
 .inbox {
-  max-width: 800px;
-  margin: 0 auto;
+  padding: 0.75rem;
 }
 
 .head {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  margin-bottom: 1rem;
+  margin-bottom: 0.75rem;
 }
 
 h2 {
   margin: 0;
-  font-size: 1.5rem;
+  font-size: 1rem;
   font-weight: 600;
 }
 
 .controls {
   display: flex;
-  gap: 0.5rem;
+  gap: 0.25rem;
+  align-items: center;
 }
 
 .controls select {
   width: auto;
+  font-size: 0.75rem;
+  padding: 0.2rem 0.35rem;
+}
+
+.controls button.refresh {
+  font-size: 0.95rem;
+  padding: 0.15rem 0.45rem;
+  line-height: 1;
 }
 
 .error {
   background: #fef2f2;
   color: var(--danger);
-  padding: 0.75rem 1rem;
+  padding: 0.5rem 0.6rem;
   border-radius: var(--radius);
   border: 1px solid #fca5a5;
+  font-size: 0.8rem;
+  margin: 0 0 0.5rem;
 }
 
 .empty {
   text-align: center;
   color: var(--text-muted);
-  padding: 3rem 1rem;
+  padding: 1.5rem 0.5rem;
+  font-size: 0.85rem;
 }
 
 .entries {
@@ -148,16 +166,18 @@ h2 {
   padding: 0;
   display: flex;
   flex-direction: column;
-  gap: 0.5rem;
+  gap: 0.35rem;
 }
 
 .entries li {
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: var(--radius);
-  padding: 1rem;
+  padding: 0.5rem 0.6rem;
   cursor: pointer;
-  transition: background 0.1s ease, border-color 0.1s ease;
+  transition:
+    background 0.1s ease,
+    border-color 0.1s ease;
 }
 
 .entries li:hover {
@@ -165,37 +185,55 @@ h2 {
   border-color: #d0d0c8;
 }
 
+.entries li.selected {
+  background: #eff6ff;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent);
+}
+
 .entries li.resolved {
-  opacity: 0.6;
+  opacity: 0.55;
 }
 
 .row1 {
   display: flex;
   justify-content: space-between;
   align-items: baseline;
+  gap: 0.5rem;
 }
 
 .vendor {
   font-weight: 600;
-  font-size: 1.05rem;
+  font-size: 0.85rem;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
 }
 
 .total {
   font-family: var(--font-mono);
   font-weight: 500;
+  font-size: 0.8rem;
+  white-space: nowrap;
 }
 
 .row2 {
   display: flex;
-  gap: 1rem;
-  font-size: 13px;
+  gap: 0.4rem;
+  font-size: 0.7rem;
   color: var(--text-muted);
-  margin-top: 0.25rem;
+  margin-top: 0.2rem;
   flex-wrap: wrap;
+  align-items: center;
 }
 
 .cat {
   color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 130px;
 }
 
 .conf {
@@ -217,5 +255,6 @@ h2 {
 .reason {
   color: var(--warn);
   font-style: italic;
+  white-space: nowrap;
 }
 </style>

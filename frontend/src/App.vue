@@ -2,7 +2,8 @@
 import { ref } from "vue";
 import TokenGate from "./components/TokenGate.vue";
 import InboxPanel from "./components/InboxPanel.vue";
-import ReviewPanel from "./components/ReviewPanel.vue";
+import PromptPanel from "./components/PromptPanel.vue";
+import DashboardPanel from "./components/DashboardPanel.vue";
 
 // Injected by vite.config.js at build time. Hover the badge to see when
 // the bundle was built; the value is the short git SHA (with a "+" suffix
@@ -13,8 +14,7 @@ const BUILD_TIME = __BUILD_TIME__;
 const STORAGE_KEY = "noviustec_token";
 
 const token = ref(localStorage.getItem(STORAGE_KEY) || "");
-const view = ref("inbox"); // "inbox" | "review"
-const selectedId = ref(null);
+const selectedPendingId = ref(null);
 const inboxKey = ref(0); // bump to force InboxPanel reload after approve/reject
 
 function onTokenSet(t) {
@@ -25,70 +25,115 @@ function onTokenSet(t) {
 function logout() {
   token.value = "";
   localStorage.removeItem(STORAGE_KEY);
-  view.value = "inbox";
-  selectedId.value = null;
+  selectedPendingId.value = null;
 }
 
-function openReview(id) {
-  selectedId.value = id;
-  view.value = "review";
+function openPending(id) {
+  selectedPendingId.value = id;
 }
 
-function backToInbox() {
-  selectedId.value = null;
-  view.value = "inbox";
-  inboxKey.value += 1; // re-mount InboxPanel so it refetches
+function closeReview() {
+  selectedPendingId.value = null;
+  inboxKey.value += 1;
 }
 </script>
 
 <template>
-  <div class="app">
-    <header>
-      <div class="brand">
-        <span class="logo">◐</span>
-        <span class="name">Noviustec</span>
-        <span class="env" :title="`Built ${BUILD_TIME}`">{{ BUILD_SHA }}</span>
-      </div>
-      <div class="actions">
-        <button v-if="token" @click="logout" class="ghost">Sign out</button>
-      </div>
-    </header>
+  <TokenGate v-if="!token" @token-set="onTokenSet" />
 
-    <main>
-      <TokenGate v-if="!token" @token-set="onTokenSet" />
-      <InboxPanel
-        v-else-if="view === 'inbox'"
-        :key="inboxKey"
-        :token="token"
-        @open="openReview"
-      />
-      <ReviewPanel
-        v-else-if="view === 'review'"
-        :token="token"
-        :id="selectedId"
-        @back="backToInbox"
-      />
+  <div v-else class="app-grid">
+    <aside class="sidebar">
+      <div class="pane inbox-pane">
+        <InboxPanel
+          :key="inboxKey"
+          :token="token"
+          :selected-id="selectedPendingId"
+          @open="openPending"
+        />
+      </div>
+      <div class="pane prompt-pane">
+        <PromptPanel :token="token" />
+      </div>
+    </aside>
+
+    <main class="main">
+      <header class="topbar">
+        <div class="brand">
+          <span class="logo">◐</span>
+          <span class="name">Noviustec</span>
+          <span class="env" :title="`Built ${BUILD_TIME}`">{{ BUILD_SHA }}</span>
+        </div>
+        <div class="actions">
+          <button @click="logout" class="ghost">Sign out</button>
+        </div>
+      </header>
+      <section class="dashboard">
+        <DashboardPanel
+          :token="token"
+          :selected-id="selectedPendingId"
+          @close="closeReview"
+        />
+      </section>
     </main>
   </div>
 </template>
 
 <style scoped>
-.app {
-  min-height: 100vh;
+.app-grid {
+  display: grid;
+  grid-template-columns: 320px 1fr;
+  height: 100vh;
+  width: 100vw;
+  overflow: hidden;
+}
+
+@media (max-width: 800px) {
+  .app-grid {
+    grid-template-columns: 1fr;
+    grid-template-rows: auto 1fr;
+    height: 100vh;
+  }
+}
+
+.sidebar {
+  display: grid;
+  grid-template-rows: 1fr 1fr;
+  border-right: 1px solid var(--border);
+  background: var(--surface);
+  min-height: 0;
+}
+
+.pane {
+  min-height: 0;
+  overflow: hidden;
+}
+
+.inbox-pane {
+  overflow-y: auto;
+  border-bottom: 1px solid var(--border);
+}
+
+.prompt-pane {
   display: flex;
   flex-direction: column;
 }
 
-header {
+.main {
+  display: grid;
+  grid-template-rows: 80px 1fr;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.topbar {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 0.75rem 1.5rem;
+  padding: 0 1.5rem;
   background: var(--surface);
   border-bottom: 1px solid var(--border);
-  position: sticky;
-  top: 0;
-  z-index: 10;
+  height: 80px;
+  box-sizing: border-box;
 }
 
 .brand {
@@ -98,13 +143,13 @@ header {
 }
 
 .logo {
-  font-size: 1.5rem;
+  font-size: 1.75rem;
   color: var(--accent);
 }
 
 .name {
   font-weight: 600;
-  font-size: 1rem;
+  font-size: 1.1rem;
 }
 
 .env {
@@ -113,6 +158,7 @@ header {
   background: #f0f0eb;
   padding: 2px 6px;
   border-radius: 4px;
+  font-family: var(--font-mono);
 }
 
 .actions button.ghost {
@@ -126,11 +172,10 @@ header {
   color: var(--text);
 }
 
-main {
-  flex: 1;
-  padding: 2rem 1.5rem;
-  max-width: 1100px;
-  margin: 0 auto;
-  width: 100%;
+.dashboard {
+  overflow-y: auto;
+  padding: 1.5rem;
+  background: var(--bg);
+  min-height: 0;
 }
 </style>

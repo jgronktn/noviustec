@@ -216,7 +216,7 @@ function formatPercent(c) {
 
 <template>
   <section class="review">
-    <button class="back ghost" @click="emit('back')">← Back to inbox</button>
+    <button class="back ghost" @click="emit('back')">✕ Close review</button>
 
     <div v-if="loading" class="loading">Loading…</div>
 
@@ -433,8 +433,7 @@ function formatPercent(c) {
 
 <style scoped>
 .review {
-  max-width: 1000px;
-  margin: 0 auto;
+  max-width: 1100px;
 }
 
 .back {
