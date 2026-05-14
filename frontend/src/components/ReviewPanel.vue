@@ -44,10 +44,27 @@ const form = ref({
   reference_kind: "",
   description: "",
   notes: "",
+  action: "to_gl",
+  match_id: null,
 });
 
+const matchCandidates = ref([]);
 const docOpening = ref(false);
 const docError = ref(null);
+
+const ACTION_LABELS = {
+  to_gl: "Save to ledger (paid)",
+  to_awaiting: "Save as invoice (awaiting payment)",
+  match: "Match to existing awaiting invoice",
+};
+
+function formatCandidateLabel(c) {
+  const dateStr = c.date instanceof Date
+    ? c.date.toISOString().slice(0, 10)
+    : (typeof c.date === "string" ? c.date.slice(0, 10) : "");
+  const ref = c.reference_number ? ` · #${c.reference_number}` : "";
+  return `${c.vendor} · ${Number(c.amount).toFixed(2)} ${c.currency} · ${dateStr}${ref}`;
+}
 
 async function viewDocument() {
   docOpening.value = true;
@@ -92,7 +109,13 @@ onMounted(async () => {
       reference_kind: p?.reference_number?.kind || d.reference_kind || "",
       description: "",
       notes: "",
+      action: d.suggested_action || "to_gl",
+      match_id:
+        d.suggested_action === "match" && d.match_candidates?.length === 1
+          ? d.match_candidates[0].id
+          : null,
     };
+    matchCandidates.value = d.match_candidates ?? [];
   } catch (e) {
     error.value = e.message;
   } finally {
@@ -115,6 +138,8 @@ async function approve() {
       reference_kind: form.value.reference_kind || null,
       description: form.value.description || "",
       notes: form.value.notes || "",
+      action: form.value.action,
+      match_id: form.value.action === "match" ? form.value.match_id : null,
     };
     await approvePending(props.token, props.id, body);
     emit("back");
@@ -159,6 +184,40 @@ function formatPercent(c) {
         <h2>Review &amp; approve</h2>
 
         <p v-if="error" class="error">{{ error }}</p>
+
+        <div class="action-picker">
+          <label>Action</label>
+          <div class="actions-grid">
+            <label
+              v-for="key in ['to_gl', 'to_awaiting', 'match']"
+              :key="key"
+              class="action-option"
+              :class="{ selected: form.action === key, disabled: key === 'match' && matchCandidates.length === 0 }"
+            >
+              <input
+                type="radio"
+                :value="key"
+                v-model="form.action"
+                :disabled="key === 'match' && matchCandidates.length === 0"
+              />
+              <span>{{ ACTION_LABELS[key] }}</span>
+            </label>
+          </div>
+          <div v-if="form.action === 'match'" class="match-picker">
+            <label>Match to which awaiting invoice?</label>
+            <select v-model="form.match_id">
+              <option :value="null" disabled>(pick one)</option>
+              <option v-for="c in matchCandidates" :key="c.id" :value="c.id">
+                {{ formatCandidateLabel(c) }}
+              </option>
+            </select>
+          </div>
+          <p v-if="form.action === 'to_awaiting'" class="hint info">
+            No GL row will be created. The invoice is filed in
+            <code>AwaitingPayment</code>; when the receipt arrives, you'll
+            match it here.
+          </p>
+        </div>
 
         <div class="grid">
           <div class="field">
@@ -252,10 +311,24 @@ function formatPercent(c) {
           </button>
           <button
             @click="approve"
-            :disabled="submitting || !form.vendor || !form.date || !form.category"
+            :disabled="
+              submitting ||
+              !form.vendor ||
+              !form.date ||
+              !form.category ||
+              (form.action === 'match' && !form.match_id)
+            "
             class="primary"
           >
-            {{ submitting ? "Saving…" : "Approve → ledger" }}
+            {{
+              submitting
+                ? "Saving…"
+                : form.action === "to_awaiting"
+                  ? "Save as awaiting payment"
+                  : form.action === "match"
+                    ? "Match → ledger"
+                    : "Approve → ledger"
+            }}
           </button>
         </div>
       </div>
@@ -387,6 +460,85 @@ function formatPercent(c) {
   font-size: 12px;
   color: var(--text-muted);
   margin: 0.25rem 0 0;
+}
+
+.hint.info {
+  background: #eff6ff;
+  color: #1e40af;
+  border: 1px solid #bfdbfe;
+  border-radius: var(--radius);
+  padding: 0.5rem 0.75rem;
+  margin-top: 0.5rem;
+  font-size: 13px;
+}
+
+.action-picker {
+  margin-bottom: 1.25rem;
+  padding-bottom: 1rem;
+  border-bottom: 1px solid var(--border);
+}
+
+.action-picker > label {
+  display: block;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-muted);
+  margin-bottom: 0.5rem;
+}
+
+.actions-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 0.5rem;
+}
+
+@media (max-width: 700px) {
+  .actions-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+.action-option {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.5rem 0.75rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  cursor: pointer;
+  font-size: 13px;
+  transition: border-color 0.1s ease, background 0.1s ease;
+}
+
+.action-option:hover:not(.disabled) {
+  border-color: var(--accent);
+}
+
+.action-option.selected {
+  border-color: var(--accent);
+  background: #eff6ff;
+}
+
+.action-option.disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.action-option input[type="radio"] {
+  width: auto;
+}
+
+.match-picker {
+  margin-top: 0.75rem;
+}
+
+.match-picker label {
+  display: block;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-muted);
+  margin-bottom: 0.25rem;
 }
 
 .actions {

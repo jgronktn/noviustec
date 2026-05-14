@@ -1,0 +1,107 @@
+// AwaitingPayment sheet operations.
+//
+// An AwaitingPayment row represents an invoice that has been received but
+// not yet paid. It does NOT count as an expense in GL (cash-basis: only
+// book when money moves). When the receipt later arrives, the user
+// matches it to this row via /api/pending/:id/approve with action=match,
+// at which point a GL row is created and this row is marked paid.
+
+import { randomUUID } from "node:crypto";
+import { SHEETS } from "./schema.js";
+import { withWorkbookRead, withWorkbookWrite, readRows } from "./workbook.js";
+
+const AWAITING_ID_PREFIX = "apw_";
+
+/**
+ * Add an awaiting-payment row.
+ *
+ * @param {object} params
+ * @param {string} params.vendor
+ * @param {Date|string} params.date - invoice date (YYYY-MM-DD or Date)
+ * @param {number} params.amount
+ * @param {string} [params.currency] - defaults to "USD"
+ * @param {string} [params.reference_number]
+ * @param {string} [params.reference_kind]
+ * @param {string} [params.description]
+ * @param {string} [params.notes]
+ * @param {string} [params.document_path] - primary doc relative path
+ * @param {string} [params.source_file]
+ * @param {string} [params.pending_id]
+ */
+export async function addAwaitingPayment(params) {
+  const id = AWAITING_ID_PREFIX + randomUUID().slice(0, 8);
+  const row = {
+    id,
+    status: "awaiting",
+    vendor: params.vendor,
+    date:
+      typeof params.date === "string"
+        ? new Date(params.date + "T00:00:00Z")
+        : params.date,
+    amount: params.amount,
+    currency: params.currency ?? "USD",
+    reference_number: params.reference_number ?? null,
+    reference_kind: params.reference_kind ?? null,
+    description: params.description ?? "",
+    notes: params.notes ?? "",
+    document_path: params.document_path ?? null,
+    source_file: params.source_file ?? null,
+    pending_id: params.pending_id ?? null,
+    created_at: new Date().toISOString(),
+    paid_at: null,
+    paid_txn_id: null,
+  };
+  await withWorkbookWrite(async (wb) => {
+    const sheet = wb.getWorksheet(SHEETS.AWAITING);
+    sheet.addRow(row);
+  });
+  return { id, row };
+}
+
+export async function listAwaiting({ status = "awaiting" } = {}) {
+  return withWorkbookRead(async (wb) => {
+    const sheet = wb.getWorksheet(SHEETS.AWAITING);
+    const rows = readRows(sheet);
+    return status === "all" ? rows : rows.filter((r) => r.status === status);
+  });
+}
+
+export async function getAwaiting(id) {
+  const all = await listAwaiting({ status: "all" });
+  return all.find((r) => r.id === id) ?? null;
+}
+
+/**
+ * Mark an awaiting row as paid. Called from the approve endpoint when
+ * the user matches a receipt to an existing AwaitingPayment row.
+ */
+export async function markAwaitingPaid(id, { paid_txn_id }) {
+  return withWorkbookWrite(async (wb) => {
+    const sheet = wb.getWorksheet(SHEETS.AWAITING);
+    let target = null;
+    sheet.eachRow({ includeEmpty: false }, (row, rowNumber) => {
+      if (rowNumber === 1) return;
+      if (row.getCell("id").value === id) target = row;
+    });
+    if (!target) throw new Error(`AwaitingPayment row not found: ${id}`);
+    target.getCell("status").value = "paid";
+    target.getCell("paid_at").value = new Date().toISOString();
+    target.getCell("paid_txn_id").value = paid_txn_id;
+    target.commit();
+    return { id, paid_txn_id };
+  });
+}
+
+/**
+ * Find awaiting rows for a vendor + total (within ±$0.01) that haven't
+ * been paid. Used by /api/pending/:id to suggest matches.
+ */
+export async function findMatchCandidates({ vendor, total }) {
+  if (!vendor || total == null) return [];
+  const rows = await listAwaiting({ status: "awaiting" });
+  return rows.filter(
+    (r) =>
+      r.vendor === vendor &&
+      Math.abs(Number(r.amount) - Number(total)) < 0.01,
+  );
+}

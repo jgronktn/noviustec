@@ -42,12 +42,38 @@ export async function addDocument(params) {
     txn_id: params.txn_id ?? null,
     pending_id: params.pending_id ?? null,
     created_at: new Date().toISOString(),
+    awaiting_id: params.awaiting_id ?? null,
   };
   await withWorkbookWrite(async (wb) => {
     const sheet = wb.getWorksheet(SHEETS.DOCUMENTS);
     sheet.addRow(row);
   });
   return { id, row };
+}
+
+/**
+ * Backfill txn_id on Documents rows that were originally archived against
+ * an AwaitingPayment row (so txn_id was null). Called from the approve
+ * endpoint when an awaiting invoice gets matched to its receipt: the
+ * invoice's prior Documents row now belongs to the same GL transaction.
+ */
+export async function attachDocumentsToTransaction({ awaiting_id, txn_id }) {
+  if (!awaiting_id || !txn_id) return { updated: 0 };
+  let updated = 0;
+  await withWorkbookWrite(async (wb) => {
+    const sheet = wb.getWorksheet(SHEETS.DOCUMENTS);
+    sheet.eachRow({ includeEmpty: false }, (row, rowNumber) => {
+      if (rowNumber === 1) return;
+      const rowAwaitingId = row.getCell("awaiting_id").value;
+      const rowTxnId = row.getCell("txn_id").value;
+      if (rowAwaitingId === awaiting_id && !rowTxnId) {
+        row.getCell("txn_id").value = txn_id;
+        row.commit();
+        updated += 1;
+      }
+    });
+  });
+  return { updated };
 }
 
 export async function listDocuments({ txn_id, pending_id } = {}) {

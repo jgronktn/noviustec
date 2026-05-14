@@ -11,6 +11,7 @@ export const SHEETS = {
   SOURCES: "Sources",
   PENDING: "PendingInbox",
   GL: "GL",
+  AWAITING: "AwaitingPayment",
   DOCUMENTS: "Documents",
 };
 
@@ -66,6 +67,24 @@ export const COLUMNS = {
     { header: "Created_At", key: "created_at", width: 22 },
     { header: "Created_By", key: "created_by", width: 12 }, // "user" | "agent"
   ],
+  [SHEETS.AWAITING]: [
+    { header: "ID", key: "id", width: 16 },
+    { header: "Status", key: "status", width: 14 }, // awaiting | paid | written_off | rejected
+    { header: "Vendor", key: "vendor", width: 28 },
+    { header: "Date", key: "date", width: 12, style: { numFmt: "yyyy-mm-dd" } }, // invoice date
+    { header: "Amount", key: "amount", width: 12, style: { numFmt: "#,##0.00" } },
+    { header: "Currency", key: "currency", width: 8 },
+    { header: "Reference_Number", key: "reference_number", width: 22 },
+    { header: "Reference_Kind", key: "reference_kind", width: 14 },
+    { header: "Description", key: "description", width: 40 },
+    { header: "Notes", key: "notes", width: 50 },
+    { header: "Document_Path", key: "document_path", width: 60 },
+    { header: "Source_File", key: "source_file", width: 50 },
+    { header: "Pending_ID", key: "pending_id", width: 16 },
+    { header: "Created_At", key: "created_at", width: 22 },
+    { header: "Paid_At", key: "paid_at", width: 22 },
+    { header: "Paid_TXN_ID", key: "paid_txn_id", width: 16 },
+  ],
   [SHEETS.DOCUMENTS]: [
     { header: "ID", key: "id", width: 16 },
     { header: "Vendor", key: "vendor", width: 28 },
@@ -78,6 +97,7 @@ export const COLUMNS = {
     { header: "TXN_ID", key: "txn_id", width: 16 },
     { header: "Pending_ID", key: "pending_id", width: 16 },
     { header: "Created_At", key: "created_at", width: 22 },
+    { header: "Awaiting_ID", key: "awaiting_id", width: 16 },
   ],
 };
 

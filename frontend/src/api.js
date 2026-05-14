@@ -49,6 +49,9 @@ export const getCategories = (token) =>
 export const getPaymentSources = (token) =>
   request(token, "GET", "/api/sources");
 
+export const listAwaiting = (token, status = "awaiting") =>
+  request(token, "GET", `/api/awaiting?status=${encodeURIComponent(status)}`);
+
 /** Quick health check, no auth. */
 export async function healthCheck() {
   const res = await fetch(`${BASE_URL}/health`);

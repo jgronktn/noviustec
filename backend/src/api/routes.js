@@ -23,7 +23,16 @@ import {
   MAX_UPLOAD_BYTES,
 } from "../processor.js";
 import { archiveAttachments, resolveDocumentPath } from "../storage/documents.js";
-import { getTransaction, addDocument } from "../ledger/index.js";
+import {
+  getTransaction,
+  addDocument,
+  attachDocumentsToTransaction,
+  addAwaitingPayment,
+  listAwaiting,
+  getAwaiting,
+  markAwaitingPaid,
+  findMatchCandidates,
+} from "../ledger/index.js";
 
 // Hardcoded for single-tenant v1. Eventually derived from authenticated session.
 const COMPANY_ID = process.env.NOVIUSTEC_COMPANY_ID || "default";
@@ -56,6 +65,16 @@ function pickFirstViewableAttachment(attachments) {
 function sanitizeForHeader(name) {
   if (!name) return "document";
   return String(name).replace(/[^a-zA-Z0-9._-]+/g, "-").slice(0, 80);
+}
+
+function serializeArchivedDoc(r) {
+  return {
+    filename: r.filename,
+    original_filename: r.original_filename,
+    reference_kind: r.reference_kind,
+    reference_number: r.reference_number,
+    document_path: r.document_path,
+  };
 }
 
 // Read at module load. Updates require service restart, which is fine —
@@ -183,7 +202,8 @@ export default async function apiRoutes(fastify, opts) {
   );
 
   // ─────────────────────────────────────────────────────────────────────────
-  // GET /api/pending/:id — single row + the full proposal from its sidecar.
+  // GET /api/pending/:id — single row + the full proposal from its sidecar,
+  // plus suggested_action and match_candidates for the awaiting workflow.
   // ─────────────────────────────────────────────────────────────────────────
   fastify.get("/api/pending/:id", async (req, reply) => {
     const row = await getPending(req.params.id);
@@ -200,7 +220,26 @@ export default async function apiRoutes(fastify, opts) {
         proposal = null; // sidecar missing or unreadable
       }
     }
-    return { ...row, proposal };
+
+    // Suggest workflow action + surface match candidates for the awaiting flow.
+    // The LLM's reference_kind drives the default; the user can override.
+    const llmKind = proposal?.proposal?.reference_number?.kind ?? row.reference_kind ?? null;
+    let match_candidates = [];
+    if (row.vendor && row.total != null) {
+      match_candidates = await findMatchCandidates({ vendor: row.vendor, total: row.total });
+    }
+    let suggested_action;
+    if (match_candidates.length > 0) {
+      // A receipt-like entry where we already have an awaiting invoice. Suggest match.
+      suggested_action = "match";
+    } else if (llmKind === "invoice") {
+      // Invoice with no prior awaiting → save as awaiting payment.
+      suggested_action = "to_awaiting";
+    } else {
+      suggested_action = "to_gl";
+    }
+
+    return { ...row, proposal, suggested_action, match_candidates };
   });
 
   // ─────────────────────────────────────────────────────────────────────────
@@ -229,6 +268,12 @@ export default async function apiRoutes(fastify, opts) {
             },
             description: { type: "string", default: "" },
             notes: { type: "string", default: "" },
+            action: {
+              type: "string",
+              enum: ["to_gl", "to_awaiting", "match"],
+              default: "to_gl",
+            },
+            match_id: { type: ["string", "null"], default: null },
           },
         },
       },
@@ -238,6 +283,12 @@ export default async function apiRoutes(fastify, opts) {
       if (!row) return reply.code(404).send({ error: "Pending entry not found" });
       if (row.status !== "pending") {
         return reply.code(409).send({ error: `Cannot approve a ${row.status} entry` });
+      }
+
+      const action = req.body.action ?? "to_gl";
+
+      if (action === "match" && !req.body.match_id) {
+        return reply.code(400).send({ error: "match_id required when action=match" });
       }
 
       // Archive every viewable PDF/image (could be multiple — Anthropic
@@ -264,6 +315,162 @@ export default async function apiRoutes(fastify, opts) {
       }
       const primary = archivedDocs[0] ?? null;
 
+      // ─── Branch 1: save as AwaitingPayment, no GL row ────────────────────
+      if (action === "to_awaiting") {
+        const { id: awaitingId } = await addAwaitingPayment({
+          vendor: req.body.vendor,
+          date: req.body.date,
+          amount: req.body.total,
+          currency: req.body.currency ?? "USD",
+          reference_number: req.body.reference_number ?? null,
+          reference_kind: req.body.reference_kind ?? null,
+          description: req.body.description ?? "",
+          notes: req.body.notes ?? "",
+          document_path: primary?.document_path ?? null,
+          source_file: row.source_file,
+          pending_id: row.id,
+        });
+
+        const docIds = [];
+        for (const rec of archivedDocs) {
+          try {
+            const { id } = await addDocument({
+              vendor: req.body.vendor,
+              date: req.body.date,
+              reference_kind: rec.reference_kind,
+              reference_number: rec.reference_number,
+              filename: rec.filename,
+              original_filename: rec.original_filename,
+              document_path: rec.document_path,
+              txn_id: null,
+              awaiting_id: awaitingId,
+              pending_id: row.id,
+            });
+            docIds.push(id);
+          } catch (err) {
+            req.log.error({ err, file: rec.filename }, "failed to write Documents row");
+          }
+        }
+
+        await updatePendingStatus(row.id, {
+          status: "approved",
+          resolution_notes: `→ ${awaitingId} (awaiting payment)`,
+        });
+
+        req.log.info(
+          {
+            pending_id: row.id,
+            awaiting_id: awaitingId,
+            action: "to_awaiting",
+            vendor: req.body.vendor,
+            total: req.body.total,
+            reference_number: req.body.reference_number ?? null,
+            documents_archived: archivedDocs.length,
+            document_ids: docIds,
+          },
+          "pending approved as awaiting payment",
+        );
+
+        return {
+          pending_id: row.id,
+          awaiting_id: awaitingId,
+          action: "to_awaiting",
+          document_path: primary?.document_path ?? null,
+          documents: archivedDocs.map(serializeArchivedDoc),
+        };
+      }
+
+      // ─── Branch 2: match a receipt to an existing AwaitingPayment ─────────
+      if (action === "match") {
+        const awaiting = await getAwaiting(req.body.match_id);
+        if (!awaiting) {
+          return reply.code(404).send({ error: `AwaitingPayment row not found: ${req.body.match_id}` });
+        }
+        if (awaiting.status !== "awaiting") {
+          return reply
+            .code(409)
+            .send({ error: `Cannot match to AwaitingPayment with status=${awaiting.status}` });
+        }
+
+        const { id: transactionId } = await addTransaction({
+          vendor: req.body.vendor,
+          date: req.body.date,
+          amount: req.body.total,
+          currency: req.body.currency ?? "USD",
+          category: req.body.category,
+          payment_source: req.body.payment_source ?? null,
+          reference_number: req.body.reference_number ?? null,
+          reference_kind: req.body.reference_kind ?? null,
+          document_path: primary?.document_path ?? awaiting.document_path ?? null,
+          description: req.body.description ?? "",
+          notes: req.body.notes ?? "",
+          source_file: row.source_file,
+          pending_id: row.id,
+          created_by: "user",
+        });
+
+        // Backfill the AwaitingPayment row → paid, link to the new GL txn.
+        await markAwaitingPaid(req.body.match_id, { paid_txn_id: transactionId });
+
+        // Backfill Documents rows that were originally linked only to the
+        // awaiting row (the invoice PDFs) — now they're also part of this txn.
+        await attachDocumentsToTransaction({
+          awaiting_id: req.body.match_id,
+          txn_id: transactionId,
+        });
+
+        // Plus: write Documents rows for THIS pending's archives (the receipt).
+        const docIds = [];
+        for (const rec of archivedDocs) {
+          try {
+            const { id } = await addDocument({
+              vendor: req.body.vendor,
+              date: req.body.date,
+              reference_kind: rec.reference_kind,
+              reference_number: rec.reference_number,
+              filename: rec.filename,
+              original_filename: rec.original_filename,
+              document_path: rec.document_path,
+              txn_id: transactionId,
+              awaiting_id: req.body.match_id,
+              pending_id: row.id,
+            });
+            docIds.push(id);
+          } catch (err) {
+            req.log.error({ err, file: rec.filename }, "failed to write Documents row");
+          }
+        }
+
+        await updatePendingStatus(row.id, {
+          status: "approved",
+          resolution_notes: `→ ${transactionId} (matched ${req.body.match_id})`,
+        });
+
+        req.log.info(
+          {
+            pending_id: row.id,
+            transaction_id: transactionId,
+            matched_awaiting_id: req.body.match_id,
+            action: "match",
+            vendor: req.body.vendor,
+            total: req.body.total,
+            documents_archived: archivedDocs.length,
+            document_ids: docIds,
+          },
+          "pending approved by matching to awaiting payment",
+        );
+
+        return {
+          pending_id: row.id,
+          transaction_id: transactionId,
+          matched_awaiting_id: req.body.match_id,
+          action: "match",
+          document_path: primary?.document_path ?? null,
+          documents: archivedDocs.map(serializeArchivedDoc),
+        };
+      }
+
+      // ─── Branch 3: default — straight to GL (current behavior) ────────────
       const { id: transactionId } = await addTransaction({
         vendor: req.body.vendor,
         date: req.body.date,
@@ -281,7 +488,6 @@ export default async function apiRoutes(fastify, opts) {
         created_by: "user",
       });
 
-      // One Documents row per archived file, all linked to the new GL txn.
       const docIds = [];
       for (const rec of archivedDocs) {
         try {
@@ -311,6 +517,7 @@ export default async function apiRoutes(fastify, opts) {
         {
           pending_id: row.id,
           transaction_id: transactionId,
+          action: "to_gl",
           vendor: req.body.vendor,
           total: req.body.total,
           reference_number: req.body.reference_number ?? null,
@@ -324,17 +531,50 @@ export default async function apiRoutes(fastify, opts) {
       return {
         pending_id: row.id,
         transaction_id: transactionId,
+        action: "to_gl",
         document_path: primary?.document_path ?? null,
-        documents: archivedDocs.map((r) => ({
-          filename: r.filename,
-          original_filename: r.original_filename,
-          reference_kind: r.reference_kind,
-          reference_number: r.reference_number,
-          document_path: r.document_path,
-        })),
+        documents: archivedDocs.map(serializeArchivedDoc),
       };
     },
   );
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // GET /api/awaiting — list AwaitingPayment rows.
+  // ─────────────────────────────────────────────────────────────────────────
+  fastify.get(
+    "/api/awaiting",
+    {
+      schema: {
+        querystring: {
+          type: "object",
+          properties: {
+            status: {
+              type: "string",
+              enum: ["awaiting", "paid", "written_off", "rejected", "all"],
+              default: "awaiting",
+            },
+            vendor: { type: "string" },
+          },
+        },
+      },
+    },
+    async (req) => {
+      let entries = await listAwaiting({ status: req.query.status });
+      if (req.query.vendor) {
+        entries = entries.filter((r) => r.vendor === req.query.vendor);
+      }
+      return { count: entries.length, entries };
+    },
+  );
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // GET /api/awaiting/:id — single AwaitingPayment row.
+  // ─────────────────────────────────────────────────────────────────────────
+  fastify.get("/api/awaiting/:id", async (req, reply) => {
+    const row = await getAwaiting(req.params.id);
+    if (!row) return reply.code(404).send({ error: "AwaitingPayment row not found" });
+    return row;
+  });
 
   // ─────────────────────────────────────────────────────────────────────────
   // GET /api/documents/pending/:id — preview the document attached to a
