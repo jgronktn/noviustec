@@ -1,6 +1,7 @@
 <script setup>
 import { ref, onMounted, computed } from "vue";
 import { listPending } from "../api.js";
+import UploadCard from "./UploadCard.vue";
 
 const props = defineProps({ token: { type: String, required: true } });
 const emit = defineEmits(["open"]);
@@ -62,6 +63,8 @@ function confidenceClass(c) {
         </button>
       </div>
     </div>
+
+    <UploadCard :token="token" @uploaded="load" />
 
     <p v-if="error" class="error">{{ error }}</p>
 

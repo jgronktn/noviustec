@@ -54,3 +54,28 @@ export async function healthCheck() {
   const res = await fetch(`${BASE_URL}/health`);
   return res.json();
 }
+
+/** Upload a single PDF/image. Reads the file, base64-encodes it, POSTs to /api/upload. */
+export async function uploadReceipt(token, { file, description }) {
+  const content_base64 = await fileToBase64(file);
+  return request(token, "POST", "/api/upload", {
+    filename: file.name,
+    content_type: file.type,
+    content_base64,
+    description: description || "",
+  });
+}
+
+function fileToBase64(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      // result is "data:<type>;base64,<content>" — strip the prefix.
+      const r = reader.result;
+      const comma = typeof r === "string" ? r.indexOf(",") : -1;
+      resolve(comma >= 0 ? r.slice(comma + 1) : r);
+    };
+    reader.onerror = () => reject(reader.error);
+    reader.readAsDataURL(file);
+  });
+}

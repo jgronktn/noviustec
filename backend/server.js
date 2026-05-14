@@ -11,8 +11,7 @@ if (existsSync(ENV_PATH)) {
   process.loadEnvFile(ENV_PATH);
 }
 
-const { parseReceipt } = await import("./src/parser/index.js");
-const { getCategories, getPaymentSources, addPending } = await import("./src/ledger/index.js");
+const { processReceiptPayload } = await import("./src/processor.js");
 
 const PORT = parseInt(process.env.PORT ?? "3000", 10);
 const HOST = process.env.HOST ?? "127.0.0.1";  // loopback only — nginx fronts it
@@ -105,65 +104,17 @@ app.post("/webhooks/postmark-inbound", async (req, reply) => {
 
   // Kick off parsing in the background. Don't await — Claude vision calls take
   // seconds and we must return 200 fast (Postmark retries non-200 responses).
-  parseAndSaveInBackground(body, filepath, req.log);
+  // Errors are logged and persisted to disk inside processReceiptPayload;
+  // we still need the .catch() here so the rejection doesn't become unhandled.
+  processReceiptPayload({
+    payload: body,
+    logger: req.log,
+    logDir: LOG_DIR,
+    sourceFilename: filename,
+  }).catch(() => {});
 
   return reply.code(200).send({ ok: true, stored: filename });
 });
-
-// ────────────────────────────────────────────────────────────────────────────
-// Background receipt parser: runs Claude vision on the saved payload, writes
-// the result as a -parsed.json sidecar, and (for parsed/needs_attention)
-// adds a row to the ledger's PendingInbox. Errors are logged and persisted,
-// not thrown — the webhook has already returned 200 by the time this runs.
-// ────────────────────────────────────────────────────────────────────────────
-async function parseAndSaveInBackground(payload, originalFilepath, logger) {
-  const parsedFilepath = originalFilepath.replace(/\.json$/, "-parsed.json");
-  const basename = path.basename(originalFilepath);
-  try {
-    const [categories, paymentSources] = await Promise.all([
-      getCategories().catch(() => []),
-      getPaymentSources().catch(() => []),
-    ]);
-
-    const result = await parseReceipt(payload, { categories, paymentSources });
-    await fs.writeFile(parsedFilepath, JSON.stringify(result, null, 2));
-
-    // Surface for user review: anything that's not a clean terminal state.
-    let pendingId = null;
-    if (result.status === "parsed" || result.status === "needs_attention") {
-      try {
-        const { id } = await addPending({ source_file: basename, result });
-        pendingId = id;
-      } catch (err) {
-        logger.error({ err, file: basename }, "failed to add pending row");
-      }
-    }
-
-    logger.info({
-      file: basename,
-      pending_id: pendingId,
-      status: result.status,
-      reason: result.reason,
-      vendor: result.proposal?.vendor?.name ?? null,
-      total: result.proposal?.total ?? null,
-      confidence: result.proposal?.confidence ?? null,
-      usage: result.usage,
-    }, "receipt parsed");
-  } catch (err) {
-    const errorRecord = {
-      status: "error",
-      reason: "parser_exception",
-      error: {
-        message: err.message,
-        stack: err.stack,
-        raw_text: err.rawText,
-      },
-      timestamp: new Date().toISOString(),
-    };
-    await fs.writeFile(parsedFilepath, JSON.stringify(errorRecord, null, 2)).catch(() => {});
-    logger.error({ err, file: basename }, "receipt parser failed");
-  }
-}
 
 // ────────────────────────────────────────────────────────────────────────────
 // Generic POST sink — useful for testing arbitrary webhook setups

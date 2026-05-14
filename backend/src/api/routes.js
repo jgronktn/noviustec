@@ -16,6 +16,12 @@ import {
   updatePendingStatus,
   addTransaction,
 } from "../ledger/index.js";
+import {
+  processReceiptPayload,
+  buildUploadPayload,
+  SUPPORTED_UPLOAD_TYPES,
+  MAX_UPLOAD_BYTES,
+} from "../processor.js";
 
 // Read at module load. Updates require service restart, which is fine —
 // systemd loads .env via EnvironmentFile= and restart picks up changes.
@@ -218,6 +224,86 @@ export default async function apiRoutes(fastify, opts) {
       );
 
       return { pending_id: row.id, transaction_id: transactionId };
+    },
+  );
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // POST /api/upload — direct upload of a receipt PDF/image. Body has the
+  // file base64-encoded. Wrapped in a Postmark-shaped synthetic payload so
+  // it flows through the exact same parser path as inbound email. Runs
+  // synchronously (~5s for the vision call); returns the parsed result.
+  // ─────────────────────────────────────────────────────────────────────────
+  fastify.post(
+    "/api/upload",
+    {
+      schema: {
+        body: {
+          type: "object",
+          required: ["filename", "content_type", "content_base64"],
+          additionalProperties: false,
+          properties: {
+            filename: { type: "string", minLength: 1 },
+            content_type: { type: "string", minLength: 1 },
+            content_base64: { type: "string", minLength: 1 },
+            description: { type: "string" },
+          },
+        },
+      },
+    },
+    async (req, reply) => {
+      const { filename, content_type, content_base64, description } = req.body;
+
+      if (!SUPPORTED_UPLOAD_TYPES.has(content_type)) {
+        return reply.code(400).send({
+          error: `Unsupported content type: ${content_type}. Allowed: ${[...SUPPORTED_UPLOAD_TYPES].join(", ")}`,
+        });
+      }
+
+      const decodedBytes = Math.floor((content_base64.length * 3) / 4);
+      if (decodedBytes > MAX_UPLOAD_BYTES) {
+        return reply.code(400).send({
+          error: `File too large: ${decodedBytes} bytes (max ${MAX_UPLOAD_BYTES})`,
+        });
+      }
+
+      const stamp = new Date().toISOString().replace(/[:.]/g, "-");
+      const sourceFilename = `upload-${stamp}.json`;
+      const payload = buildUploadPayload({ filename, content_type, content_base64, description });
+
+      try {
+        await fs.writeFile(
+          path.join(logDir, sourceFilename),
+          JSON.stringify(payload, null, 2),
+        );
+      } catch (err) {
+        req.log.error({ err, file: sourceFilename }, "failed to write upload payload");
+        return reply.code(500).send({ error: "Failed to persist upload" });
+      }
+
+      req.log.info(
+        { file: sourceFilename, filename, content_type, bytes: decodedBytes },
+        "upload received",
+      );
+
+      try {
+        const { result, pending_id } = await processReceiptPayload({
+          payload,
+          logger: req.log,
+          logDir,
+          sourceFilename,
+        });
+        return {
+          pending_id,
+          source_file: sourceFilename,
+          status: result.status,
+          reason: result.reason,
+          proposal: result.proposal,
+        };
+      } catch (err) {
+        return reply
+          .code(500)
+          .send({ error: `Parser failed: ${err.message}`, source_file: sourceFilename });
+      }
     },
   );
 
