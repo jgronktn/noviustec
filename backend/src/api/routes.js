@@ -6,7 +6,6 @@
 // were registered in.
 
 import { promises as fs } from "node:fs";
-import { Readable } from "node:stream";
 import * as path from "node:path";
 
 import {
@@ -85,6 +84,26 @@ function serializeArchivedDoc(r) {
 // Read at module load. Updates require service restart, which is fine —
 // systemd loads .env via EnvironmentFile= and restart picks up changes.
 const API_TOKEN = process.env.NOVIUSTEC_API_TOKEN || null;
+
+// Kept in sync with the CORS config in server.js. The SSE handler hijacks
+// the response (so @fastify/cors's onSend hook is bypassed), so we have to
+// echo the same Access-Control-Allow-Origin header manually for the
+// browser to accept the streamed response.
+const ALLOWED_ORIGINS = new Set([
+  "https://app.noviustec.com",
+  "http://localhost:5500",
+  "http://localhost:5173",
+  "http://localhost:3000",
+]);
+
+function corsHeadersFor(origin) {
+  if (!origin || !ALLOWED_ORIGINS.has(origin)) return {};
+  return {
+    "Access-Control-Allow-Origin": origin,
+    "Access-Control-Allow-Credentials": "true",
+    Vary: "Origin",
+  };
+}
 
 export default async function apiRoutes(fastify, opts) {
   const logDir = opts.logDir;
@@ -873,44 +892,58 @@ export default async function apiRoutes(fastify, opts) {
         "agent chat started",
       );
 
-      // Bridge the agent's async generator into a Node Readable. We can't
-      // use reply.hijack() here — that bypasses @fastify/cors's onSend
-      // hook, so the streamed response goes out without
-      // Access-Control-Allow-Origin and browsers reject it as a CORS
-      // failure (surfaced as a generic NetworkError).
-      const messages = req.body.messages;
-      async function* sseFrames() {
-        try {
-          for await (const event of runAgent({
-            messages,
-            logger: req.log,
-            companyName: COMPANY_NAME,
-          })) {
-            yield `data: ${JSON.stringify(event)}\n\n`;
-          }
-        } catch (err) {
-          req.log.error(
-            { err: err.message, stack: err.stack },
-            "agent loop failed",
-          );
-          yield `data: ${JSON.stringify({
-            type: "error",
-            error: err.message,
-          })}\n\n`;
-        } finally {
-          req.log.info(
-            { duration_ms: Date.now() - started },
-            "agent chat finished",
-          );
-        }
-      }
+      // Hijack so we own the response lifecycle end-to-end. Two reasons:
+      //
+      // 1) CORS — we set Access-Control-Allow-Origin manually here
+      //    (mirroring what @fastify/cors's onSend hook would have set on a
+      //    normal response), because hijacking bypasses that hook.
+      // 2) Connection: close — using keep-alive with this streamed response
+      //    leaves the connection in a state where the next browser request
+      //    intermittently fails (NetworkError on alternating attempts).
+      //    Closing per-request adds ~one TLS handshake; well worth the
+      //    reliability.
+      reply.hijack();
+      const res = reply.raw;
+      res.writeHead(200, {
+        ...corsHeadersFor(req.headers.origin),
+        "Content-Type": "text/event-stream",
+        "Cache-Control": "no-cache, no-transform",
+        Connection: "close",
+        "X-Accel-Buffering": "no", // disable nginx proxy buffering
+      });
 
-      return reply
-        .type("text/event-stream")
-        .header("Cache-Control", "no-cache, no-transform")
-        .header("Connection", "keep-alive")
-        .header("X-Accel-Buffering", "no") // disable nginx proxy buffering
-        .send(Readable.from(sseFrames()));
+      const send = (event) => {
+        if (res.writableEnded) return;
+        res.write(`data: ${JSON.stringify(event)}\n\n`);
+      };
+
+      // If the client disconnects mid-stream we still want to drain the
+      // agent loop's logging in `finally`, but stop writing.
+      req.raw.on("close", () => {
+        if (!res.writableEnded) res.end();
+      });
+
+      try {
+        for await (const event of runAgent({
+          messages: req.body.messages,
+          logger: req.log,
+          companyName: COMPANY_NAME,
+        })) {
+          send(event);
+        }
+      } catch (err) {
+        req.log.error(
+          { err: err.message, stack: err.stack },
+          "agent loop failed",
+        );
+        send({ type: "error", error: err.message });
+      } finally {
+        req.log.info(
+          { duration_ms: Date.now() - started },
+          "agent chat finished",
+        );
+        if (!res.writableEnded) res.end();
+      }
     },
   );
 }
