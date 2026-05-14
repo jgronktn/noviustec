@@ -12,6 +12,8 @@
 import { promises as fs } from "node:fs";
 import * as path from "node:path";
 
+import { isInlineAttachment } from "../parser/attachments.js";
+
 // Companies root resolution mirrors ledger/workbook.js: env var if set,
 // otherwise relative to the backend directory. Production keeps the env
 // var unset and the default `backend/companies/` resolves correctly under
@@ -77,7 +79,7 @@ export async function archiveAttachments({
     return [];
   }
 
-  const supported = collectArchivableAttachments(payload?.Attachments);
+  const supported = collectArchivableAttachments(payload?.Attachments, payload?.HtmlBody ?? "");
   if (supported.length === 0) return [];
 
   const vendorSlug = slugify(vendor) || "unknown-vendor";
@@ -167,14 +169,17 @@ export function resolveDocumentPath({ companyId, documentPath }) {
 // ──────────────────────────────────────────────────────────────────────────
 // Helpers
 // ──────────────────────────────────────────────────────────────────────────
-function collectArchivableAttachments(attachments) {
+function collectArchivableAttachments(attachments, htmlBody) {
   if (!Array.isArray(attachments) || attachments.length === 0) return [];
   return attachments.filter((a) => {
     if (typeof a?.ContentType !== "string" || typeof a?.Content !== "string") return false;
     if (a.Content.length === 0) return false;
     const ct = a.ContentType.toLowerCase().split(";")[0].trim();
     if (!EXT_BY_MIME.has(ct)) return false;
-    // Skip Outlook's tiny ~WRD000X.jpg layout artifacts (typically <2KB).
+    // Skip inline images (email signature logos, etc.) referenced via cid:
+    // in the HtmlBody. Same detection the triage stage uses.
+    if (isInlineAttachment(a, htmlBody)) return false;
+    // Legacy: skip Outlook's tiny ~WRD000X.jpg layout artifacts (~824B).
     if ((a.ContentLength ?? 0) < 2048 && (a.Name ?? "").startsWith("~WRD")) return false;
     return true;
   });

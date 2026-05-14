@@ -1,3 +1,5 @@
+import { isInlineAttachment } from "./attachments.js";
+
 // Pure-JS triage of an inbound Postmark payload.
 // Classifies the payload before we pay for vision tokens.
 //
@@ -40,10 +42,23 @@ export function triage(payload) {
   }
 
   const attachments = Array.isArray(payload.Attachments) ? payload.Attachments : [];
+  const htmlBody = payload?.HtmlBody ?? "";
   const supported = [];
   const skipped = [];
   for (const att of attachments) {
     const kind = classifyAttachment(att);
+    // Inline images embedded in the HTML body (signature logos, etc.) are
+    // identified by a ContentID that's referenced as cid:... in HtmlBody.
+    // They're never real receipts — skip before they cost vision tokens.
+    if ((kind === "pdf" || kind === "image") && isInlineAttachment(att, htmlBody)) {
+      skipped.push({
+        name: att?.Name ?? "(unnamed)",
+        content_type: att?.ContentType ?? null,
+        size_bytes: att?.ContentLength ?? null,
+        reason: "inline_signature",
+      });
+      continue;
+    }
     if (kind === "pdf" || kind === "image") {
       supported.push({ ...att, _kind: kind });
     } else {
