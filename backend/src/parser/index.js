@@ -78,7 +78,7 @@ export async function parseReceipt(payload, options = {}) {
   }
 
   // receipt_candidate
-  const { blocks, oversize } = buildContentBlocks(triageResult.attachments);
+  const { blocks, oversize, compressed } = await buildContentBlocks(triageResult.attachments);
   if (blocks.length === 0) {
     return {
       ...baseResult({
@@ -97,7 +97,10 @@ export async function parseReceipt(payload, options = {}) {
     contentBlocks: blocks,
     categories,
     paymentSources,
-    extra: oversize.length > 0 ? { oversize } : {},
+    extra: {
+      ...(oversize.length > 0 ? { oversize } : {}),
+      ...(compressed.length > 0 ? { compressed } : {}),
+    },
   });
 }
 

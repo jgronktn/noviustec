@@ -27,7 +27,12 @@ const SUPPORTED_UPLOAD_TYPES = new Set([
   "image/gif",
 ]);
 
-const MAX_UPLOAD_BYTES = 5 * 1024 * 1024; // 5MB, matches parser/normalize.js
+// Upload cap. Generous enough for raw phone photos; the parser's
+// normalize stage will compress oversized images before the Anthropic
+// call (which has a 5 MiB per-image hard limit). Postmark inbound and
+// nginx are both configured for 30MB body limits, so base64-inflated
+// uploads up to ~22MB will fit through the pipeline.
+const MAX_UPLOAD_BYTES = 20 * 1024 * 1024;
 
 export { SUPPORTED_UPLOAD_TYPES, MAX_UPLOAD_BYTES };
 

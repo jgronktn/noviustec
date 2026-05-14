@@ -12,7 +12,9 @@ const SUPPORTED_TYPES = [
   "image/webp",
   "image/gif",
 ];
-const MAX_BYTES = 5 * 1024 * 1024;
+// 20 MB — generous for raw phone photos. Backend compresses oversized
+// images (>~4.5MB) before sending to Anthropic's 5 MiB-limited vision API.
+const MAX_BYTES = 20 * 1024 * 1024;
 
 const dragOver = ref(false);
 const file = ref(null);
@@ -121,7 +123,7 @@ function formatSize(bytes) {
 
       <div v-else-if="!file" class="state">
         <p class="primary">Drop a receipt here or click to pick</p>
-        <p class="hint">PDF or image (JPEG, PNG, WEBP, GIF) up to 5 MB</p>
+        <p class="hint">PDF or image (JPEG, PNG, WEBP, GIF) up to 20 MB. Large photos are compressed automatically.</p>
       </div>
 
       <div v-else class="state selected">
