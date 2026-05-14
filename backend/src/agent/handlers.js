@@ -271,6 +271,65 @@ export async function runTool(name, input) {
       };
     }
 
+    case "show_vendor_breakdown": {
+      const rows = await listTransactions({
+        from: args.from,
+        to: args.to,
+        category: args.category,
+      });
+      const buckets = new Map();
+      let totalExpense = 0;
+      for (const r of rows) {
+        const vendor = r.vendor || "(no vendor)";
+        const amount = Number(r.amount) || 0;
+        totalExpense += amount;
+        const b = buckets.get(vendor) ?? { vendor, total: 0, count: 0 };
+        b.total += amount;
+        b.count += 1;
+        buckets.set(vendor, b);
+      }
+      let vendors = [...buckets.values()]
+        .map((b) => ({ ...b, total: Math.round(b.total * 100) / 100 }))
+        .sort((a, b) => b.total - a.total);
+      const HARD_CAP = 50;
+      const requested = Math.min(
+        Number.isInteger(args.limit) && args.limit > 0 ? args.limit : HARD_CAP,
+        HARD_CAP,
+      );
+      const truncated = vendors.length > requested;
+      vendors = vendors.slice(0, requested);
+      const periodDesc =
+        args.from && args.to
+          ? `${args.from} – ${args.to}`
+          : args.from
+            ? `from ${args.from}`
+            : args.to
+              ? `through ${args.to}`
+              : "all time";
+      const title =
+        args.title ??
+        (args.category
+          ? `Vendors · ${args.category} · ${periodDesc}`
+          : `Vendors · ${periodDesc}`);
+      const props = {
+        period: { from: args.from ?? null, to: args.to ?? null },
+        category: args.category ?? null,
+        count: vendors.length,
+        total_count: rows.length,
+        total_expense: Math.round(totalExpense * 100) / 100,
+        truncated,
+        vendors,
+      };
+      return {
+        __panel: { kind: "vendor_breakdown", title, props },
+        count: vendors.length,
+        total_count: rows.length,
+        total_expense: props.total_expense,
+        truncated,
+        top_vendor: vendors[0]?.vendor ?? null,
+      };
+    }
+
     case "show_kpi_summary": {
       const today = new Date();
       const ymdToday = today.toISOString().slice(0, 10);

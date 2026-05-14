@@ -201,6 +201,36 @@ export const TOOL_DEFINITIONS = [
     },
   },
   {
+    name: "show_vendor_breakdown",
+    description:
+      "Render a per-vendor spend breakdown as a horizontal bar list in the dashboard. Use when the user asks to 'see' / 'list' / 'show' vendors, who they're spending the most with, or wants a vendor leaderboard. Cash-basis: only counts approved GL transactions.",
+    input_schema: {
+      type: "object",
+      properties: {
+        from: {
+          type: "string",
+          description: "Inclusive start date in YYYY-MM-DD format. Omit for all-time.",
+        },
+        to: {
+          type: "string",
+          description: "Inclusive end date in YYYY-MM-DD format. Omit for all-time.",
+        },
+        category: {
+          type: "string",
+          description: "Filter to vendors used within a single category (exact match).",
+        },
+        limit: {
+          type: "integer",
+          description: "Cap to top N vendors by total spend. Defaults to all vendors (capped at 50).",
+        },
+        title: {
+          type: "string",
+          description: "Optional title.",
+        },
+      },
+    },
+  },
+  {
     name: "show_kpi_summary",
     description:
       "Render a headline KPI tile grid in the dashboard (pending count, YTD spend, outstanding total, recent transaction count). Use when the user asks for an overview / 'how are we doing' / 'state of the books'. Always queries the current state — does not take a date range.",
