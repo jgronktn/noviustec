@@ -105,6 +105,58 @@ export async function uploadReceipt(token, { file, description }) {
   });
 }
 
+/**
+ * Stream a chat turn from the bookkeeping agent. POSTs the full message
+ * history and consumes the SSE response, invoking `onEvent` with each
+ * parsed event ({type: "text_delta"|"tool_use"|"tool_result"|"usage"|"done"|"error", ...}).
+ * Resolves when the stream closes.
+ */
+export async function streamAgentResponse(token, messages, onEvent) {
+  const res = await fetch(`${BASE_URL}/api/agent/chat`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${token}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({ messages }),
+  });
+  if (!res.ok) {
+    let msg = `HTTP ${res.status}`;
+    try {
+      const data = await res.json();
+      msg = data.error || msg;
+    } catch {}
+    const err = new Error(msg);
+    err.status = res.status;
+    throw err;
+  }
+  if (!res.body) {
+    throw new Error("Streaming not supported by this browser");
+  }
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  while (true) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    // SSE frames are separated by a blank line; within a frame, fields
+    // are line-delimited. We only emit `data:` lines.
+    const lines = buffer.split("\n");
+    buffer = lines.pop() ?? ""; // keep partial trailing line
+    for (const line of lines) {
+      if (!line.startsWith("data: ")) continue;
+      const payload = line.slice(6);
+      if (!payload) continue;
+      try {
+        onEvent(JSON.parse(payload));
+      } catch {
+        // ignore malformed frames rather than aborting the stream
+      }
+    }
+  }
+}
+
 function fileToBase64(file) {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();

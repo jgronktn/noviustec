@@ -17,6 +17,10 @@ const token = ref(localStorage.getItem(STORAGE_KEY) || "");
 const selectedPendingId = ref(null);
 const inboxKey = ref(0); // bump to force InboxPanel reload after approve/reject
 
+// Agent-pushed canvas panels. Newest on top. Persists across review-panel
+// toggles — agent panels stay parked while the user reviews a pending row.
+const agentPanels = ref([]); // [{id, kind, title, props}]
+
 function onTokenSet(t) {
   token.value = t;
   localStorage.setItem(STORAGE_KEY, t);
@@ -26,6 +30,7 @@ function logout() {
   token.value = "";
   localStorage.removeItem(STORAGE_KEY);
   selectedPendingId.value = null;
+  agentPanels.value = [];
 }
 
 function openPending(id) {
@@ -35,6 +40,19 @@ function openPending(id) {
 function closeReview() {
   selectedPendingId.value = null;
   inboxKey.value += 1;
+}
+
+function onAgentPanel(panel) {
+  // Push to front — newest panels appear on top of the stack.
+  agentPanels.value = [panel, ...agentPanels.value];
+}
+
+function dismissPanel(id) {
+  agentPanels.value = agentPanels.value.filter((p) => p.id !== id);
+}
+
+function clearPanels() {
+  agentPanels.value = [];
 }
 </script>
 
@@ -52,7 +70,7 @@ function closeReview() {
         />
       </div>
       <div class="pane prompt-pane">
-        <PromptPanel :token="token" />
+        <PromptPanel :token="token" @panel="onAgentPanel" />
       </div>
     </aside>
 
@@ -71,7 +89,10 @@ function closeReview() {
         <DashboardPanel
           :token="token"
           :selected-id="selectedPendingId"
+          :panels="agentPanels"
           @close="closeReview"
+          @dismiss-panel="dismissPanel"
+          @clear-panels="clearPanels"
         />
       </section>
     </main>

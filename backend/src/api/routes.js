@@ -35,9 +35,11 @@ import {
   markAwaitingPaid,
   findMatchCandidates,
 } from "../ledger/index.js";
+import { runAgent } from "../agent/loop.js";
 
 // Hardcoded for single-tenant v1. Eventually derived from authenticated session.
 const COMPANY_ID = process.env.NOVIUSTEC_COMPANY_ID || "default";
+const COMPANY_NAME = process.env.NOVIUSTEC_COMPANY_NAME || "Noviustec";
 
 const MIME_BY_EXT = {
   pdf: "application/pdf",
@@ -826,6 +828,81 @@ export default async function apiRoutes(fastify, opts) {
 
       req.log.info({ pending_id: row.id, reason: req.body.reason }, "pending rejected");
       return { pending_id: row.id, status: "rejected" };
+    },
+  );
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // POST /api/agent/chat — bookkeeping agent (Sonnet 4.6 + read-only tools),
+  // streamed back as Server-Sent Events. Each event line is:
+  //   data: {"type":"text_delta","text":"..."}
+  //
+  // Event types emitted: text_delta, tool_use, tool_result, usage, done, error.
+  // ─────────────────────────────────────────────────────────────────────────
+  fastify.post(
+    "/api/agent/chat",
+    {
+      schema: {
+        body: {
+          type: "object",
+          required: ["messages"],
+          additionalProperties: false,
+          properties: {
+            messages: {
+              type: "array",
+              minItems: 1,
+              items: {
+                type: "object",
+                required: ["role", "content"],
+                additionalProperties: false,
+                properties: {
+                  role: { type: "string", enum: ["user", "assistant"] },
+                  // string or content-block array — SDK validates the shape
+                  content: {},
+                },
+              },
+            },
+          },
+        },
+      },
+    },
+    async (req, reply) => {
+      reply.hijack();
+      const res = reply.raw;
+      res.writeHead(200, {
+        "Content-Type": "text/event-stream",
+        "Cache-Control": "no-cache, no-transform",
+        Connection: "keep-alive",
+        "X-Accel-Buffering": "no", // disable nginx proxy buffering
+      });
+
+      const send = (event) => {
+        res.write(`data: ${JSON.stringify(event)}\n\n`);
+      };
+
+      const started = Date.now();
+      req.log.info(
+        { turns: 0, msg_count: req.body.messages.length },
+        "agent chat started",
+      );
+
+      try {
+        for await (const event of runAgent({
+          messages: req.body.messages,
+          logger: req.log,
+          companyName: COMPANY_NAME,
+        })) {
+          send(event);
+        }
+      } catch (err) {
+        req.log.error({ err: err.message, stack: err.stack }, "agent loop failed");
+        send({ type: "error", error: err.message });
+      } finally {
+        req.log.info(
+          { duration_ms: Date.now() - started },
+          "agent chat finished",
+        );
+        res.end();
+      }
     },
   );
 }

@@ -1,28 +1,87 @@
 <script setup>
-import { ref } from "vue";
+import { ref, computed, nextTick, useTemplateRef } from "vue";
+import { streamAgentResponse } from "../api.js";
 
 const props = defineProps({ token: { type: String, required: true } });
+const emit = defineEmits(["panel"]);
 
 const prompt = ref("");
-const history = ref([]); // [{ text, kind: "user"|"agent", time }]
+const busy = ref(false);
+// turn: { kind: "user"|"agent", text: string, toolCalls?: [{ name, status, rows }], error?: string }
+const history = ref([]);
+const historyEl = useTemplateRef("historyEl");
 
-// Phase 2 placeholder. When the agent loop ships, this will POST to
-// /api/agent/chat (or stream events) and feed responses back into
-// `history` while emitting canvas/dashboard reshape signals to App.vue.
-function submit() {
+const canSend = computed(() => prompt.value.trim().length > 0 && !busy.value);
+
+function apiMessages() {
+  return history.value
+    .filter((t) => (t.text && t.text.length > 0) || t.kind === "user")
+    .map((t) => ({
+      role: t.kind === "user" ? "user" : "assistant",
+      content: t.text,
+    }));
+}
+
+async function scrollToBottom() {
+  await nextTick();
+  if (historyEl.value) historyEl.value.scrollTop = historyEl.value.scrollHeight;
+}
+
+async function submit() {
   const text = prompt.value.trim();
-  if (!text) return;
-  history.value.push({ text, kind: "user", time: Date.now() });
-  history.value.push({
-    text: "Agent isn't wired up yet — this lands in Phase 2. The substrate (ledger, parser, archive, awaiting workflow) is in place; next step is the Sonnet 4.6 tool-use loop.",
-    kind: "agent",
-    time: Date.now() + 1,
-  });
+  if (!text || busy.value) return;
+  busy.value = true;
+
+  history.value.push({ kind: "user", text });
+  const agentTurn = { kind: "agent", text: "", toolCalls: [], error: null };
+  history.value.push(agentTurn);
   prompt.value = "";
+  await scrollToBottom();
+
+  try {
+    const messages = apiMessages();
+    await streamAgentResponse(props.token, messages, (event) => {
+      if (event.type === "text_delta") {
+        agentTurn.text += event.text;
+        scrollToBottom();
+      } else if (event.type === "tool_use") {
+        agentTurn.toolCalls.push({
+          id: event.id,
+          name: event.name,
+          status: "running",
+          rows: null,
+        });
+        scrollToBottom();
+      } else if (event.type === "tool_result") {
+        const tc = agentTurn.toolCalls.find((c) => c.id === event.id);
+        if (tc) {
+          tc.status = event.ok ? "done" : "error";
+          tc.rows = event.rows;
+          tc.rendered = event.rendered ?? null;
+        }
+      } else if (event.type === "panel") {
+        emit("panel", {
+          id: crypto.randomUUID(),
+          kind: event.kind,
+          title: event.title,
+          props: event.props,
+          createdAt: Date.now(),
+        });
+      } else if (event.type === "error") {
+        agentTurn.error = event.error;
+      }
+      // usage + done are recorded server-side; nothing to render here.
+    });
+  } catch (err) {
+    agentTurn.error =
+      err.status === 401 ? "Token rejected (401)" : err.message;
+  } finally {
+    busy.value = false;
+    scrollToBottom();
+  }
 }
 
 function onKeydown(e) {
-  // Cmd/Ctrl+Enter submits — like most chat UIs.
   if ((e.metaKey || e.ctrlKey) && e.key === "Enter") {
     e.preventDefault();
     submit();
@@ -34,10 +93,9 @@ function onKeydown(e) {
   <div class="prompt-panel">
     <header class="head">
       <h3>Ask</h3>
-      <span class="phase-tag">Phase 2</span>
     </header>
 
-    <div class="history" v-if="history.length > 0">
+    <div v-if="history.length > 0" ref="historyEl" class="history">
       <div
         v-for="(turn, i) in history"
         :key="i"
@@ -45,19 +103,43 @@ function onKeydown(e) {
         :class="turn.kind"
       >
         <span class="label">{{ turn.kind === "user" ? "You" : "Agent" }}</span>
-        <p>{{ turn.text }}</p>
+        <p v-if="turn.text" class="text">{{ turn.text }}</p>
+        <p
+          v-else-if="turn.kind === 'agent' && busy && i === history.length - 1 && (turn.toolCalls?.length ?? 0) === 0"
+          class="text thinking"
+        >
+          Thinking…
+        </p>
+        <ul
+          v-if="turn.toolCalls && turn.toolCalls.length > 0"
+          class="tool-calls"
+        >
+          <li
+            v-for="tc in turn.toolCalls"
+            :key="tc.id"
+            :class="['tool', `tool-${tc.status}`]"
+          >
+            <span class="tool-name">{{ tc.name }}</span>
+            <span class="tool-status">
+              <template v-if="tc.status === 'running'">…</template>
+              <template v-else-if="tc.status === 'done'">
+                {{ tc.rows != null ? `${tc.rows} rows` : "ok" }}
+              </template>
+              <template v-else>failed</template>
+            </span>
+          </li>
+        </ul>
+        <p v-if="turn.error" class="turn-error">⚠ {{ turn.error }}</p>
       </div>
     </div>
 
     <div v-else class="empty-hint">
-      <p>
-        Natural-language interface to your books. <strong>Coming in Phase 2.</strong>
-      </p>
-      <p class="examples">Example prompts:</p>
+      <p>Natural-language interface to your books.</p>
+      <p class="examples">Try:</p>
       <ul>
-        <li>"Show me cloud spend by month for 2026"</li>
+        <li>"What's pending review?"</li>
+        <li>"Show spend by category this month"</li>
         <li>"What's outstanding from RNZ Electric?"</li>
-        <li>"Approve the latest DigitalOcean invoice"</li>
       </ul>
     </div>
 
@@ -65,13 +147,14 @@ function onKeydown(e) {
       <textarea
         v-model="prompt"
         @keydown="onKeydown"
+        :disabled="busy"
         placeholder="Ask anything about your books…"
         rows="3"
       />
       <div class="composer-actions">
         <span class="hint">⌘/Ctrl+Enter</span>
-        <button type="submit" :disabled="!prompt.trim()" class="primary">
-          Send
+        <button type="submit" :disabled="!canSend" class="primary">
+          {{ busy ? "…" : "Send" }}
         </button>
       </div>
     </form>
@@ -101,15 +184,6 @@ function onKeydown(e) {
   font-weight: 600;
 }
 
-.phase-tag {
-  font-size: 0.7rem;
-  color: var(--text-muted);
-  background: #f0f0eb;
-  padding: 2px 6px;
-  border-radius: 4px;
-  font-family: var(--font-mono);
-}
-
 .history {
   flex: 1;
   overflow-y: auto;
@@ -132,18 +206,69 @@ function onKeydown(e) {
   letter-spacing: 0.04em;
 }
 
-.turn p {
+.turn p.text {
   margin: 0.2rem 0 0;
   line-height: 1.4;
+  white-space: pre-wrap;
+  word-wrap: break-word;
 }
 
-.turn.user p {
+.turn.user p.text {
   color: var(--text);
 }
 
-.turn.agent p {
+.turn.agent p.text {
+  color: var(--text);
+}
+
+.turn p.text.thinking {
   color: var(--text-muted);
   font-style: italic;
+}
+
+.turn-error {
+  margin: 0.3rem 0 0;
+  font-size: 0.75rem;
+  color: var(--danger);
+}
+
+.tool-calls {
+  margin: 0.3rem 0 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+}
+
+.tool {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.7rem;
+  font-family: var(--font-mono);
+  color: var(--text-muted);
+  background: #f0f0eb;
+  border-radius: 3px;
+  padding: 1px 6px;
+  align-self: flex-start;
+  max-width: 100%;
+}
+
+.tool-name::before {
+  content: "🔧 ";
+}
+
+.tool-status {
+  color: var(--text-muted);
+}
+
+.tool-done .tool-status {
+  color: var(--ok);
+}
+
+.tool-error .tool-status {
+  color: var(--danger);
 }
 
 .empty-hint {
@@ -188,6 +313,10 @@ function onKeydown(e) {
   resize: none;
   font-size: 0.85rem;
   padding: 0.5rem 0.6rem;
+}
+
+.composer textarea:disabled {
+  opacity: 0.65;
 }
 
 .composer-actions {
