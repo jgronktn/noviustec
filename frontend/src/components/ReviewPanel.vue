@@ -7,6 +7,7 @@ import {
   approvePending,
   rejectPending,
   openPendingDocument,
+  reparsePending,
 } from "../api.js";
 
 const REFERENCE_KINDS = [
@@ -51,6 +52,7 @@ const form = ref({
 const matchCandidates = ref([]);
 const docOpening = ref(false);
 const docError = ref(null);
+const reparsing = ref(false);
 
 const ACTION_LABELS = {
   to_gl: "Save to ledger (paid)",
@@ -75,6 +77,48 @@ async function viewDocument() {
     docError.value = e.message;
   } finally {
     docOpening.value = false;
+  }
+}
+
+async function reparse() {
+  if (
+    !confirm(
+      "Re-run the parser on this entry? This overwrites the saved sidecar and refreshes the form below with the new fields.",
+    )
+  ) {
+    return;
+  }
+  reparsing.value = true;
+  error.value = null;
+  try {
+    await reparsePending(props.token, props.id);
+    // Re-fetch detail so suggested_action + form pre-fill are recomputed
+    // from the freshly-updated PendingInbox row.
+    const d = await getPending(props.token, props.id);
+    detail.value = d;
+    const p = d.proposal?.proposal;
+    form.value = {
+      vendor: p?.vendor?.name || d.vendor || "",
+      date: p?.date || (d.date ? new Date(d.date).toISOString().slice(0, 10) : ""),
+      total: p?.total?.amount ?? d.total ?? 0,
+      currency: p?.total?.currency || d.currency || "USD",
+      category: p?.suggested_category || d.suggested_category || "",
+      payment_source: p?.suggested_payment_source || d.suggested_source || null,
+      reference_number: p?.reference_number?.value || d.reference_number || "",
+      reference_kind: p?.reference_number?.kind || d.reference_kind || "",
+      description: "",
+      notes: "",
+      action: d.suggested_action || "to_gl",
+      match_id:
+        d.suggested_action === "match" && d.match_candidates?.length === 1
+          ? d.match_candidates[0].id
+          : null,
+    };
+    matchCandidates.value = d.match_candidates ?? [];
+  } catch (e) {
+    error.value = e.message;
+  } finally {
+    reparsing.value = false;
   }
 }
 
@@ -353,6 +397,9 @@ function formatPercent(c) {
         <div class="doc-action">
           <button @click="viewDocument" :disabled="docOpening" class="ghost-block">
             {{ docOpening ? "Opening…" : "📎 View attached document" }}
+          </button>
+          <button @click="reparse" :disabled="reparsing" class="ghost-block">
+            {{ reparsing ? "Re-parsing…" : "🔄 Re-parse with current parser" }}
           </button>
           <p v-if="docError" class="error small">{{ docError }}</p>
         </div>

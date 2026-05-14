@@ -14,8 +14,10 @@ import {
   listPending,
   getPending,
   updatePendingStatus,
+  updatePendingFromParse,
   addTransaction,
 } from "../ledger/index.js";
+import { parseReceipt } from "../parser/index.js";
 import {
   processReceiptPayload,
   buildUploadPayload,
@@ -711,6 +713,81 @@ export default async function apiRoutes(fastify, opts) {
       }
     },
   );
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // POST /api/pending/:id/reparse — re-run the parser on the saved payload,
+  // overwrite the existing PendingInbox row's data fields, and write a
+  // fresh -parsed.json sidecar. Useful when an entry was parsed before
+  // some parser improvement (e.g. reference_number extraction) and the
+  // pending row is missing fields.
+  // ─────────────────────────────────────────────────────────────────────────
+  fastify.post("/api/pending/:id/reparse", async (req, reply) => {
+    const row = await getPending(req.params.id);
+    if (!row) return reply.code(404).send({ error: "Pending entry not found" });
+    if (row.status !== "pending") {
+      return reply.code(409).send({ error: `Cannot reparse a ${row.status} entry` });
+    }
+    if (!row.source_file) {
+      return reply.code(400).send({ error: "No source_file recorded for this row" });
+    }
+
+    const payloadPath = path.join(logDir, row.source_file);
+    let payload;
+    try {
+      payload = JSON.parse(await fs.readFile(payloadPath, "utf-8"));
+    } catch {
+      return reply.code(404).send({ error: "Source payload missing or unreadable" });
+    }
+
+    let result;
+    try {
+      const [categories, paymentSources] = await Promise.all([
+        getCategories().catch(() => []),
+        getPaymentSources().catch(() => []),
+      ]);
+      result = await parseReceipt(payload, { categories, paymentSources });
+    } catch (err) {
+      return reply.code(500).send({ error: `Parser failed: ${err.message}` });
+    }
+
+    // Fresh sidecar overwrites the prior one.
+    const parsedPath = path.join(
+      logDir,
+      row.source_file.replace(/\.json$/, "-parsed.json"),
+    );
+    await fs
+      .writeFile(parsedPath, JSON.stringify(result, null, 2))
+      .catch((err) => req.log.error({ err }, "failed to write reparsed sidecar"));
+
+    // Update existing pending row in place — keeps id, status, source_file
+    // intact so the UI/links stay valid.
+    try {
+      await updatePendingFromParse(row.id, result);
+    } catch (err) {
+      return reply.code(500).send({ error: `Failed to update pending row: ${err.message}` });
+    }
+
+    req.log.info(
+      {
+        pending_id: row.id,
+        status: result.status,
+        reference_kind: result.proposal?.reference_number?.kind ?? null,
+        reference_number: result.proposal?.reference_number?.value ?? null,
+        vendor: result.proposal?.vendor?.name ?? null,
+        total: result.proposal?.total?.amount ?? null,
+        usage: result.usage,
+      },
+      "pending reparsed",
+    );
+
+    return {
+      pending_id: row.id,
+      status: result.status,
+      reason: result.reason,
+      proposal: result.proposal,
+      usage: result.usage,
+    };
+  });
 
   // ─────────────────────────────────────────────────────────────────────────
   // POST /api/pending/:id/reject — marks pending rejected, no GL row.

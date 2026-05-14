@@ -100,6 +100,40 @@ function pendingRowFromResult(id, source_file, result) {
   };
 }
 
+/**
+ * Overwrite the parsed-data fields of an existing PendingInbox row from a
+ * fresh parseReceipt() result. Used by /api/pending/:id/reparse to refresh
+ * rows that were parsed before some parser improvement (e.g. before
+ * reference_number extraction shipped). Keeps id, status, received_at,
+ * source_file, resolved_at, resolution_notes intact.
+ */
+export async function updatePendingFromParse(id, result) {
+  return withWorkbookWrite(async (wb) => {
+    const sheet = wb.getWorksheet(SHEETS.PENDING);
+    let target = null;
+    sheet.eachRow({ includeEmpty: false }, (row, rowNumber) => {
+      if (rowNumber === 1) return;
+      if (row.getCell("id").value === id) target = row;
+    });
+    if (!target) {
+      throw new Error(`Pending row not found: ${id}`);
+    }
+    const p = result.proposal;
+    target.getCell("vendor").value = p?.vendor?.name ?? null;
+    target.getCell("date").value = p?.date ? parseDateOrNull(p.date) : null;
+    target.getCell("total").value = p?.total?.amount ?? null;
+    target.getCell("currency").value = p?.total?.currency ?? null;
+    target.getCell("reference_number").value = p?.reference_number?.value ?? null;
+    target.getCell("reference_kind").value = p?.reference_number?.kind ?? null;
+    target.getCell("suggested_category").value = p?.suggested_category ?? null;
+    target.getCell("suggested_source").value = p?.suggested_payment_source ?? null;
+    target.getCell("confidence").value = p?.confidence ?? null;
+    target.getCell("reason").value = result.reason ?? null;
+    target.commit();
+    return { id };
+  });
+}
+
 function parseDateOrNull(iso) {
   // Stored as a real Date so Excel formats nicely. We trust the parser's
   // YYYY-MM-DD output; if it's malformed, leave the cell blank rather than

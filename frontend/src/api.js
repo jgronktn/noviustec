@@ -43,6 +43,9 @@ export const approvePending = (token, id, body) =>
 export const rejectPending = (token, id, body) =>
   request(token, "POST", `/api/pending/${encodeURIComponent(id)}/reject`, body);
 
+export const reparsePending = (token, id) =>
+  request(token, "POST", `/api/pending/${encodeURIComponent(id)}/reparse`);
+
 export const getCategories = (token) =>
   request(token, "GET", "/api/categories");
 
