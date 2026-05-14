@@ -6,6 +6,7 @@
 // were registered in.
 
 import { promises as fs } from "node:fs";
+import { Readable } from "node:stream";
 import * as path from "node:path";
 
 import {
@@ -866,43 +867,50 @@ export default async function apiRoutes(fastify, opts) {
       },
     },
     async (req, reply) => {
-      reply.hijack();
-      const res = reply.raw;
-      res.writeHead(200, {
-        "Content-Type": "text/event-stream",
-        "Cache-Control": "no-cache, no-transform",
-        Connection: "keep-alive",
-        "X-Accel-Buffering": "no", // disable nginx proxy buffering
-      });
-
-      const send = (event) => {
-        res.write(`data: ${JSON.stringify(event)}\n\n`);
-      };
-
       const started = Date.now();
       req.log.info(
-        { turns: 0, msg_count: req.body.messages.length },
+        { msg_count: req.body.messages.length },
         "agent chat started",
       );
 
-      try {
-        for await (const event of runAgent({
-          messages: req.body.messages,
-          logger: req.log,
-          companyName: COMPANY_NAME,
-        })) {
-          send(event);
+      // Bridge the agent's async generator into a Node Readable. We can't
+      // use reply.hijack() here — that bypasses @fastify/cors's onSend
+      // hook, so the streamed response goes out without
+      // Access-Control-Allow-Origin and browsers reject it as a CORS
+      // failure (surfaced as a generic NetworkError).
+      const messages = req.body.messages;
+      async function* sseFrames() {
+        try {
+          for await (const event of runAgent({
+            messages,
+            logger: req.log,
+            companyName: COMPANY_NAME,
+          })) {
+            yield `data: ${JSON.stringify(event)}\n\n`;
+          }
+        } catch (err) {
+          req.log.error(
+            { err: err.message, stack: err.stack },
+            "agent loop failed",
+          );
+          yield `data: ${JSON.stringify({
+            type: "error",
+            error: err.message,
+          })}\n\n`;
+        } finally {
+          req.log.info(
+            { duration_ms: Date.now() - started },
+            "agent chat finished",
+          );
         }
-      } catch (err) {
-        req.log.error({ err: err.message, stack: err.stack }, "agent loop failed");
-        send({ type: "error", error: err.message });
-      } finally {
-        req.log.info(
-          { duration_ms: Date.now() - started },
-          "agent chat finished",
-        );
-        res.end();
       }
+
+      return reply
+        .type("text/event-stream")
+        .header("Cache-Control", "no-cache, no-transform")
+        .header("Connection", "keep-alive")
+        .header("X-Accel-Buffering", "no") // disable nginx proxy buffering
+        .send(Readable.from(sseFrames()));
     },
   );
 }
