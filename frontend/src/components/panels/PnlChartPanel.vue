@@ -2,11 +2,11 @@
 import { computed } from "vue";
 
 const props = defineProps({
-  props: { type: Object, required: true },
+  data: { type: Object, required: true },
 });
 
 const max = computed(() => {
-  const values = props.props.totals_by_category?.map((b) => b.total) ?? [];
+  const values = props.data.totals_by_category?.map((b) => b.total) ?? [];
   return Math.max(1, ...values);
 });
 
@@ -26,17 +26,17 @@ function pct(amount) {
 <template>
   <div class="pnl-chart">
     <div class="summary">
-      <span class="total">{{ fmt(props.total_expense) }}</span>
+      <span class="total">{{ fmt(data.total_expense) }}</span>
       <span class="meta">
-        across {{ props.total_count }} transactions ·
-        {{ props.period.from }} – {{ props.period.to }}
+        across {{ data.total_count }} transactions ·
+        {{ data.period.from }} – {{ data.period.to }}
       </span>
     </div>
-    <div v-if="props.totals_by_category.length === 0" class="empty">
+    <div v-if="data.totals_by_category.length === 0" class="empty">
       No transactions in this period.
     </div>
     <ul v-else class="bars">
-      <li v-for="row in props.totals_by_category" :key="row.category" class="bar-row">
+      <li v-for="row in data.totals_by_category" :key="row.category" class="bar-row">
         <span class="cat">{{ row.category }}</span>
         <span class="bar-wrap">
           <span class="bar" :style="{ width: pct(row.total) + '%' }" />

@@ -1,6 +1,6 @@
 <script setup>
-const props = defineProps({
-  props: { type: Object, required: true },
+defineProps({
+  data: { type: Object, required: true },
 });
 
 function fmt(amount, currency = "USD") {
@@ -16,23 +16,23 @@ function fmt(amount, currency = "USD") {
   <div class="kpi-summary">
     <div class="tile">
       <span class="label">Pending review</span>
-      <span class="value">{{ props.pending_count }}</span>
+      <span class="value">{{ data.pending_count }}</span>
       <span class="hint">in the inbox</span>
     </div>
     <div class="tile">
       <span class="label">YTD spend</span>
-      <span class="value">{{ fmt(props.ytd_spend) }}</span>
-      <span class="hint">{{ props.ytd_count }} transactions</span>
+      <span class="value">{{ fmt(data.ytd_spend) }}</span>
+      <span class="hint">{{ data.ytd_count }} transactions</span>
     </div>
     <div class="tile">
       <span class="label">Outstanding</span>
-      <span class="value">{{ fmt(props.outstanding_total) }}</span>
-      <span class="hint">{{ props.outstanding_count }} unpaid invoice<span v-if="props.outstanding_count !== 1">s</span></span>
+      <span class="value">{{ fmt(data.outstanding_total) }}</span>
+      <span class="hint">{{ data.outstanding_count }} unpaid invoice<span v-if="data.outstanding_count !== 1">s</span></span>
     </div>
     <div class="tile">
       <span class="label">Last 30 days</span>
-      <span class="value">{{ fmt(props.recent_30d_spend) }}</span>
-      <span class="hint">{{ props.recent_30d_count }} txns</span>
+      <span class="value">{{ fmt(data.recent_30d_spend) }}</span>
+      <span class="hint">{{ data.recent_30d_count }} txns</span>
     </div>
   </div>
 </template>

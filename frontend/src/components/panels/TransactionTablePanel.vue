@@ -1,6 +1,6 @@
 <script setup>
-const props = defineProps({
-  props: { type: Object, required: true },
+defineProps({
+  data: { type: Object, required: true },
 });
 
 function fmt(amount, currency = "USD") {
@@ -25,21 +25,21 @@ function activeFilters(f) {
 <template>
   <div class="txn-table-panel">
     <div class="summary">
-      <span class="total">{{ fmt(props.total_amount) }}</span>
+      <span class="total">{{ fmt(data.total_amount) }}</span>
       <span class="meta">
-        {{ props.count }} txn<span v-if="props.count !== 1">s</span>
-        <template v-if="props.truncated"> · showing first {{ props.shown }}</template>
+        {{ data.count }} txn<span v-if="data.count !== 1">s</span>
+        <template v-if="data.truncated"> · showing first {{ data.shown }}</template>
       </span>
       <div class="filters">
         <span
-          v-for="(f, i) in activeFilters(props.filters)"
+          v-for="(f, i) in activeFilters(data.filters)"
           :key="i"
           class="filter-chip"
         >{{ f }}</span>
       </div>
     </div>
 
-    <div v-if="props.transactions.length === 0" class="empty">
+    <div v-if="data.transactions.length === 0" class="empty">
       No transactions match these filters.
     </div>
     <div v-else class="table-wrap">
@@ -55,7 +55,7 @@ function activeFilters(f) {
           </tr>
         </thead>
         <tbody>
-          <tr v-for="t in props.transactions" :key="t.id">
+          <tr v-for="t in data.transactions" :key="t.id">
             <td class="mono">{{ t.date }}</td>
             <td>{{ t.vendor }}</td>
             <td class="cat">{{ t.category }}</td>

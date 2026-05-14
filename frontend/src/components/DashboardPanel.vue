@@ -70,7 +70,7 @@ function componentFor(kind) {
           <component
             v-if="componentFor(panel.kind)"
             :is="componentFor(panel.kind)"
-            :props="panel.props"
+            :data="panel.props"
           />
           <pre v-else class="unknown">Unknown panel kind: {{ panel.kind }}</pre>
         </div>

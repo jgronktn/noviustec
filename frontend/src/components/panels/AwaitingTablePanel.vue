@@ -1,6 +1,6 @@
 <script setup>
-const props = defineProps({
-  props: { type: Object, required: true },
+defineProps({
+  data: { type: Object, required: true },
 });
 
 function fmt(amount, currency = "USD") {
@@ -23,13 +23,13 @@ function ageClass(days) {
 <template>
   <div class="awaiting-panel">
     <div class="summary">
-      <span class="total">{{ fmt(props.total_outstanding) }}</span>
+      <span class="total">{{ fmt(data.total_outstanding) }}</span>
       <span class="meta">
-        across {{ props.count }} unpaid invoice<span v-if="props.count !== 1">s</span>
+        across {{ data.count }} unpaid invoice<span v-if="data.count !== 1">s</span>
       </span>
     </div>
 
-    <div v-if="props.entries.length === 0" class="empty">
+    <div v-if="data.entries.length === 0" class="empty">
       No outstanding invoices. 🎉
     </div>
     <div v-else class="table-wrap">
@@ -44,7 +44,7 @@ function ageClass(days) {
           </tr>
         </thead>
         <tbody>
-          <tr v-for="e in props.entries" :key="e.id">
+          <tr v-for="e in data.entries" :key="e.id">
             <td>{{ e.vendor }}</td>
             <td class="mono">{{ e.date }}</td>
             <td class="mono ref">{{ e.reference_number || "—" }}</td>
