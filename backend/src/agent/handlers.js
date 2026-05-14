@@ -288,7 +288,16 @@ export async function runTool(name, input) {
 
     case "show_file_list": {
       const kindFilter = args.kind ?? "all";
-      const wantLedger = kindFilter === "ledger" || kindFilter === "all";
+      const hasNarrowingFilter = Boolean(
+        args.vendor || args.from || args.to,
+      );
+      // Include the ledger workbook only when the user is asking broadly
+      // (kind='all' with no vendor/date narrowing) or explicitly for the
+      // ledger. Asking for 'Anthropic files' or 'all receipt files' should
+      // not surface the workbook — it's a system file, not a vendor doc.
+      const wantLedger =
+        kindFilter === "ledger" ||
+        (kindFilter === "all" && !hasNarrowingFilter);
       const wantDocuments = kindFilter !== "ledger";
 
       const files = [];
