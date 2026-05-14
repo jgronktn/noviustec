@@ -14,8 +14,14 @@ if (!process.env.LEDGER_PATH) {
   process.env.LEDGER_PATH = path.join(BACKEND_DIR, "companies", "default", "ledger.xlsx");
 }
 
-const { getLedgerPath, getCategories, getPaymentSources, listPending, listTransactions } =
-  await import("../src/ledger/index.js");
+const {
+  getLedgerPath,
+  getCategories,
+  getPaymentSources,
+  listPending,
+  listTransactions,
+  listDocuments,
+} = await import("../src/ledger/index.js");
 
 console.log("Ledger:", getLedgerPath());
 console.log();
@@ -47,4 +53,13 @@ console.log(`GL transactions (${gl.length}):`);
 for (const t of gl) {
   const dateStr = t.date instanceof Date ? t.date.toISOString().slice(0, 10) : t.date;
   console.log(`  - ${t.id} ${dateStr} ${t.vendor} ${t.amount} ${t.currency} → ${t.category}`);
+}
+console.log();
+
+const docs = await listDocuments();
+console.log(`Archived documents (${docs.length}):`);
+for (const d of docs) {
+  const dateStr = d.date instanceof Date ? d.date.toISOString().slice(0, 10) : d.date ?? "(no date)";
+  const ref = d.reference_number ? ` ${d.reference_kind ?? "?"}#${d.reference_number}` : "";
+  console.log(`  - ${d.id} ${dateStr} ${d.vendor ?? "(no vendor)"}${ref} → ${d.document_path}`);
 }

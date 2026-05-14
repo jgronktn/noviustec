@@ -44,11 +44,23 @@ async function loadOrCreate() {
     // readFile restores header VALUES but not the in-memory column key
     // associations — re-apply them so addRow(obj) and getCell(key) keep
     // working. Headers in COLUMNS are the canonical truth; user-renamed
-    // headers in Excel get reset on next write (intentional).
+    // headers in Excel get reset on next write (intentional). Also lazily
+    // adds any sheets that didn't exist when the file was first created —
+    // self-migrating schema for existing ledgers.
+    let migrated = false;
     for (const sheetName of Object.keys(COLUMNS)) {
-      const sheet = wb.getWorksheet(sheetName);
-      if (sheet) sheet.columns = COLUMNS[sheetName];
+      let sheet = wb.getWorksheet(sheetName);
+      if (!sheet) {
+        sheet = wb.addWorksheet(sheetName);
+        sheet.columns = COLUMNS[sheetName];
+        styleHeader(sheet);
+        sheet.views = [{ state: "frozen", ySplit: 1 }];
+        migrated = true;
+      } else {
+        sheet.columns = COLUMNS[sheetName];
+      }
     }
+    if (migrated) await wb.xlsx.writeFile(LEDGER_PATH);
     return { workbook: wb, created: false };
   }
 
@@ -56,7 +68,7 @@ async function loadOrCreate() {
   wb.creator = "Noviustec";
   wb.created = new Date();
 
-  for (const sheetName of [SHEETS.CATEGORIES, SHEETS.SOURCES, SHEETS.PENDING, SHEETS.GL]) {
+  for (const sheetName of Object.keys(COLUMNS)) {
     const sheet = wb.addWorksheet(sheetName);
     sheet.columns = COLUMNS[sheetName];
     styleHeader(sheet);

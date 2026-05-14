@@ -22,6 +22,41 @@ import {
   SUPPORTED_UPLOAD_TYPES,
   MAX_UPLOAD_BYTES,
 } from "../processor.js";
+import { archiveAttachments, resolveDocumentPath } from "../storage/documents.js";
+import { getTransaction, addDocument } from "../ledger/index.js";
+
+// Hardcoded for single-tenant v1. Eventually derived from authenticated session.
+const COMPANY_ID = process.env.NOVIUSTEC_COMPANY_ID || "default";
+
+const MIME_BY_EXT = {
+  pdf: "application/pdf",
+  jpg: "image/jpeg",
+  jpeg: "image/jpeg",
+  png: "image/png",
+  webp: "image/webp",
+  gif: "image/gif",
+};
+
+const VIEWABLE_MIMES = new Set(Object.values(MIME_BY_EXT));
+
+function pickFirstViewableAttachment(attachments) {
+  if (!Array.isArray(attachments)) return null;
+  const supported = attachments.filter((a) => {
+    if (typeof a?.ContentType !== "string" || typeof a?.Content !== "string") return false;
+    const ct = a.ContentType.toLowerCase().split(";")[0].trim();
+    return VIEWABLE_MIMES.has(ct);
+  });
+  if (supported.length === 0) return null;
+  const pdfs = supported.filter((a) => a.ContentType.toLowerCase().startsWith("application/pdf"));
+  const pool = pdfs.length > 0 ? pdfs : supported;
+  pool.sort((a, b) => (b.ContentLength ?? 0) - (a.ContentLength ?? 0));
+  return pool[0];
+}
+
+function sanitizeForHeader(name) {
+  if (!name) return "document";
+  return String(name).replace(/[^a-zA-Z0-9._-]+/g, "-").slice(0, 80);
+}
 
 // Read at module load. Updates require service restart, which is fine —
 // systemd loads .env via EnvironmentFile= and restart picks up changes.
@@ -186,6 +221,12 @@ export default async function apiRoutes(fastify, opts) {
             currency: { type: "string", default: "USD" },
             category: { type: "string", minLength: 1 },
             payment_source: { type: ["string", "null"], default: null },
+            reference_number: { type: ["string", "null"], default: null },
+            reference_kind: {
+              type: ["string", "null"],
+              enum: ["invoice", "receipt", "order", "transaction", "confirmation", "other", null],
+              default: null,
+            },
             description: { type: "string", default: "" },
             notes: { type: "string", default: "" },
           },
@@ -199,6 +240,30 @@ export default async function apiRoutes(fastify, opts) {
         return reply.code(409).send({ error: `Cannot approve a ${row.status} entry` });
       }
 
+      // Archive every viewable PDF/image (could be multiple — Anthropic
+      // emails ship Invoice+Receipt for the same charge). The first
+      // record returned is the primary doc (largest; usually the one
+      // matching the parser's reference). GL's document_path points
+      // to it; full archive list lives in the Documents sheet.
+      const reference = req.body.reference_number
+        ? { value: req.body.reference_number, kind: req.body.reference_kind ?? "other" }
+        : null;
+      let archivedDocs = [];
+      try {
+        archivedDocs = await archiveAttachments({
+          companyId: COMPANY_ID,
+          logDir,
+          sourceFile: row.source_file,
+          vendor: req.body.vendor,
+          date: req.body.date,
+          reference,
+          pendingId: row.id,
+        });
+      } catch (err) {
+        req.log.error({ err, pending_id: row.id }, "document archive failed; proceeding anyway");
+      }
+      const primary = archivedDocs[0] ?? null;
+
       const { id: transactionId } = await addTransaction({
         vendor: req.body.vendor,
         date: req.body.date,
@@ -206,6 +271,9 @@ export default async function apiRoutes(fastify, opts) {
         currency: req.body.currency ?? "USD",
         category: req.body.category,
         payment_source: req.body.payment_source ?? null,
+        reference_number: req.body.reference_number ?? null,
+        reference_kind: req.body.reference_kind ?? null,
+        document_path: primary?.document_path ?? null,
         description: req.body.description ?? "",
         notes: req.body.notes ?? "",
         source_file: row.source_file,
@@ -213,19 +281,116 @@ export default async function apiRoutes(fastify, opts) {
         created_by: "user",
       });
 
+      // One Documents row per archived file, all linked to the new GL txn.
+      const docIds = [];
+      for (const rec of archivedDocs) {
+        try {
+          const { id } = await addDocument({
+            vendor: req.body.vendor,
+            date: req.body.date,
+            reference_kind: rec.reference_kind,
+            reference_number: rec.reference_number,
+            filename: rec.filename,
+            original_filename: rec.original_filename,
+            document_path: rec.document_path,
+            txn_id: transactionId,
+            pending_id: row.id,
+          });
+          docIds.push(id);
+        } catch (err) {
+          req.log.error({ err, file: rec.filename }, "failed to write Documents row");
+        }
+      }
+
       await updatePendingStatus(row.id, {
         status: "approved",
         resolution_notes: `→ ${transactionId}`,
       });
 
       req.log.info(
-        { pending_id: row.id, transaction_id: transactionId, vendor: req.body.vendor, total: req.body.total },
+        {
+          pending_id: row.id,
+          transaction_id: transactionId,
+          vendor: req.body.vendor,
+          total: req.body.total,
+          reference_number: req.body.reference_number ?? null,
+          documents_archived: archivedDocs.length,
+          document_ids: docIds,
+          primary_document_path: primary?.document_path ?? null,
+        },
         "pending approved",
       );
 
-      return { pending_id: row.id, transaction_id: transactionId };
+      return {
+        pending_id: row.id,
+        transaction_id: transactionId,
+        document_path: primary?.document_path ?? null,
+        documents: archivedDocs.map((r) => ({
+          filename: r.filename,
+          original_filename: r.original_filename,
+          reference_kind: r.reference_kind,
+          reference_number: r.reference_number,
+          document_path: r.document_path,
+        })),
+      };
     },
   );
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // GET /api/documents/pending/:id — preview the document attached to a
+  // pending entry BEFORE approval. Reads the base64 attachment out of the
+  // saved inbound/upload payload and streams it. For inline-HTML rows (no
+  // attachment) returns 404.
+  // ─────────────────────────────────────────────────────────────────────────
+  fastify.get("/api/documents/pending/:id", async (req, reply) => {
+    const row = await getPending(req.params.id);
+    if (!row) return reply.code(404).send({ error: "Pending entry not found" });
+    if (!row.source_file) return reply.code(404).send({ error: "No source file recorded" });
+
+    const payloadPath = path.join(logDir, row.source_file);
+    let payload;
+    try {
+      payload = JSON.parse(await fs.readFile(payloadPath, "utf-8"));
+    } catch {
+      return reply.code(404).send({ error: "Source payload missing" });
+    }
+    const att = pickFirstViewableAttachment(payload?.Attachments);
+    if (!att) {
+      return reply.code(404).send({ error: "No archivable attachment in source payload" });
+    }
+    const buffer = Buffer.from(att.Content, "base64");
+    reply
+      .header("Content-Type", att.ContentType)
+      .header("Content-Disposition", `inline; filename="${sanitizeForHeader(att.Name)}"`)
+      .send(buffer);
+  });
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // GET /api/documents/transaction/:txn_id — stream the archived document
+  // for an approved GL transaction. Looks up document_path on the row,
+  // resolves it safely inside the company's documents/ tree, and streams.
+  // ─────────────────────────────────────────────────────────────────────────
+  fastify.get("/api/documents/transaction/:txn_id", async (req, reply) => {
+    const txn = await getTransaction(req.params.txn_id);
+    if (!txn) return reply.code(404).send({ error: "Transaction not found" });
+    if (!txn.document_path) {
+      return reply.code(404).send({ error: "No document archived for this transaction" });
+    }
+    const absolute = resolveDocumentPath({ companyId: COMPANY_ID, documentPath: txn.document_path });
+    if (!absolute) return reply.code(400).send({ error: "Invalid document path" });
+
+    try {
+      const buffer = await fs.readFile(absolute);
+      const ext = path.extname(absolute).slice(1).toLowerCase();
+      const mime = MIME_BY_EXT[ext] || "application/octet-stream";
+      reply
+        .header("Content-Type", mime)
+        .header("Content-Disposition", `inline; filename="${path.basename(absolute)}"`)
+        .send(buffer);
+    } catch {
+      return reply.code(404).send({ error: "Document file missing on disk" });
+    }
+  });
 
   // ─────────────────────────────────────────────────────────────────────────
   // POST /api/upload — direct upload of a receipt PDF/image. Body has the

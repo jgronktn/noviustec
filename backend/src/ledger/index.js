@@ -5,4 +5,5 @@ export { initLedger, getLedgerPath } from "./workbook.js";
 export { getCategories } from "./categories.js";
 export { getPaymentSources } from "./sources.js";
 export { addPending, listPending, getPending, updatePendingStatus } from "./pending.js";
-export { addTransaction, listTransactions } from "./transactions.js";
+export { addTransaction, listTransactions, getTransaction } from "./transactions.js";
+export { addDocument, listDocuments, getDocument } from "./documents.js";

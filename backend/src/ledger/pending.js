@@ -89,6 +89,8 @@ function pendingRowFromResult(id, source_file, result) {
     date: p?.date ? parseDateOrNull(p.date) : null,
     total: p?.total?.amount ?? null,
     currency: p?.total?.currency ?? null,
+    reference_number: p?.reference_number?.value ?? null,
+    reference_kind: p?.reference_number?.kind ?? null,
     suggested_category: p?.suggested_category ?? null,
     suggested_source: p?.suggested_payment_source ?? null,
     confidence: p?.confidence ?? null,

@@ -13,6 +13,7 @@ export const proposalSchema = {
     "vendor",
     "date",
     "total",
+    "reference_number",
     "line_items",
     "suggested_category",
     "suggested_payment_source",
@@ -74,6 +75,29 @@ export const proposalSchema = {
             currency: {
               type: "string",
               description: "ISO 4217 currency code (USD, EUR, GBP, etc.).",
+            },
+          },
+        },
+        { type: "null" },
+      ],
+    },
+    reference_number: {
+      anyOf: [
+        {
+          type: "object",
+          additionalProperties: false,
+          required: ["value", "kind"],
+          properties: {
+            value: {
+              type: "string",
+              description:
+                "Reference number printed on the document, verbatim. Examples: 'INV-2026-0042', '149011494', 'TXN-A3F9B2'.",
+            },
+            kind: {
+              type: "string",
+              enum: ["invoice", "receipt", "order", "transaction", "confirmation", "other"],
+              description:
+                "What kind of reference number this is. invoice = invoice number; receipt = receipt number / register reference; order = order number; transaction = card/payment transaction ID; confirmation = booking/order confirmation code; other = anything else (use sparingly).",
             },
           },
         },

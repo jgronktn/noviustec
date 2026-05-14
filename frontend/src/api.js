@@ -55,6 +55,39 @@ export async function healthCheck() {
   return res.json();
 }
 
+/**
+ * Open the document attached to a pending entry in a new tab.
+ * Uses fetch+blob so the bearer token can travel in the header rather
+ * than the URL.
+ */
+export async function openPendingDocument(token, pendingId) {
+  return openDocumentBlob(token, `/api/documents/pending/${encodeURIComponent(pendingId)}`);
+}
+
+/** Same for an approved GL transaction's archived document. */
+export async function openTransactionDocument(token, txnId) {
+  return openDocumentBlob(token, `/api/documents/transaction/${encodeURIComponent(txnId)}`);
+}
+
+async function openDocumentBlob(token, path) {
+  const res = await fetch(`${BASE_URL}${path}`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!res.ok) {
+    let msg = `HTTP ${res.status}`;
+    try {
+      const data = await res.json();
+      msg = data.error || msg;
+    } catch {}
+    throw new Error(msg);
+  }
+  const blob = await res.blob();
+  const url = URL.createObjectURL(blob);
+  window.open(url, "_blank", "noopener,noreferrer");
+  // Free the object URL after the window has a chance to load it.
+  setTimeout(() => URL.revokeObjectURL(url), 60_000);
+}
+
 /** Upload a single PDF/image. Reads the file, base64-encodes it, POSTs to /api/upload. */
 export async function uploadReceipt(token, { file, description }) {
   const content_base64 = await fileToBase64(file);

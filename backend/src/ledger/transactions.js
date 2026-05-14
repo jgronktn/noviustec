@@ -37,6 +37,9 @@ export async function addTransaction(params) {
     payment_source: params.payment_source ?? null,
     amount: params.amount,
     currency: params.currency ?? "USD",
+    reference_number: params.reference_number ?? null,
+    reference_kind: params.reference_kind ?? null,
+    document_path: params.document_path ?? null,
     notes: params.notes ?? "",
     source_file: params.source_file ?? null,
     pending_id: params.pending_id ?? null,
@@ -48,6 +51,11 @@ export async function addTransaction(params) {
     sheet.addRow(row);
   });
   return { id, row };
+}
+
+export async function getTransaction(id) {
+  const all = await listTransactions();
+  return all.find((t) => t.id === id) ?? null;
 }
 
 export async function listTransactions({ from, to, category, payment_source } = {}) {

@@ -11,6 +11,7 @@ export const SHEETS = {
   SOURCES: "Sources",
   PENDING: "PendingInbox",
   GL: "GL",
+  DOCUMENTS: "Documents",
 };
 
 export const COLUMNS = {
@@ -38,6 +39,8 @@ export const COLUMNS = {
     { header: "Date", key: "date", width: 12, style: { numFmt: "yyyy-mm-dd" } },
     { header: "Total", key: "total", width: 12, style: { numFmt: '#,##0.00' } },
     { header: "Currency", key: "currency", width: 8 },
+    { header: "Reference_Number", key: "reference_number", width: 22 },
+    { header: "Reference_Kind", key: "reference_kind", width: 14 }, // invoice|receipt|order|transaction|confirmation|other
     { header: "Suggested_Category", key: "suggested_category", width: 28 },
     { header: "Suggested_Source", key: "suggested_source", width: 28 },
     { header: "Confidence", key: "confidence", width: 10, style: { numFmt: "0.00" } },
@@ -54,11 +57,27 @@ export const COLUMNS = {
     { header: "Payment_Source", key: "payment_source", width: 28 },
     { header: "Amount", key: "amount", width: 12, style: { numFmt: '#,##0.00' } },
     { header: "Currency", key: "currency", width: 8 },
+    { header: "Reference_Number", key: "reference_number", width: 22 },
+    { header: "Reference_Kind", key: "reference_kind", width: 14 },
+    { header: "Document_Path", key: "document_path", width: 60 }, // primary doc; full list in Documents sheet
     { header: "Notes", key: "notes", width: 50 },
     { header: "Source_File", key: "source_file", width: 50 },
     { header: "Pending_ID", key: "pending_id", width: 16 },
     { header: "Created_At", key: "created_at", width: 22 },
     { header: "Created_By", key: "created_by", width: 12 }, // "user" | "agent"
+  ],
+  [SHEETS.DOCUMENTS]: [
+    { header: "ID", key: "id", width: 16 },
+    { header: "Vendor", key: "vendor", width: 28 },
+    { header: "Date", key: "date", width: 12, style: { numFmt: "yyyy-mm-dd" } },
+    { header: "Reference_Kind", key: "reference_kind", width: 14 },
+    { header: "Reference_Number", key: "reference_number", width: 22 },
+    { header: "Filename", key: "filename", width: 50 },
+    { header: "Original_Filename", key: "original_filename", width: 50 },
+    { header: "Document_Path", key: "document_path", width: 60 },
+    { header: "TXN_ID", key: "txn_id", width: 16 },
+    { header: "Pending_ID", key: "pending_id", width: 16 },
+    { header: "Created_At", key: "created_at", width: 22 },
   ],
 };
 
