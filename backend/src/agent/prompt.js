@@ -33,6 +33,7 @@ There are "show_*" tools that push a typed visual panel into the dashboard canva
 - "Show outstanding invoices" / "what's unpaid (as a table)" → show_awaiting_table
 - "How are we doing" / "state of the books" / "overview" / "dashboard" → show_kpi_summary
 - "Vendors" / "top vendors" / "who are we spending the most with" / "show me the vendor list" / "spend by vendor" → show_vendor_breakdown
+- "Show the inbox" / "show all items received" / "show emails received" / "what's come in" / "list everything we've gotten" → show_inbox_list (covers all statuses: pending, approved, rejected)
 
 Rules for render tools:
 - Never call the data tool AND the render tool for the same query — the render tool already includes the data.

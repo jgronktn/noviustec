@@ -201,6 +201,29 @@ export const TOOL_DEFINITIONS = [
     },
   },
   {
+    name: "show_inbox_list",
+    description:
+      "Render a table of all items received in the inbox (receipts that arrived via email or upload). Shows pending, approved, and rejected entries together so the user can see the full history of what's come in. Default returns all statuses, newest first. Cap at 100 rows.",
+    input_schema: {
+      type: "object",
+      properties: {
+        status: {
+          type: "string",
+          enum: ["pending", "approved", "rejected", "all"],
+          description: "Filter by status. Default: all.",
+        },
+        limit: {
+          type: "integer",
+          description: "Cap to most recent N entries. Default: 100.",
+        },
+        title: {
+          type: "string",
+          description: "Optional title.",
+        },
+      },
+    },
+  },
+  {
     name: "show_vendor_breakdown",
     description:
       "Render a per-vendor spend breakdown as a horizontal bar list in the dashboard. Use when the user asks to 'see' / 'list' / 'show' vendors, who they're spending the most with, or wants a vendor leaderboard. Cash-basis: only counts approved GL transactions.",

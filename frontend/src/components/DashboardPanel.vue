@@ -6,6 +6,7 @@ import TransactionTablePanel from "./panels/TransactionTablePanel.vue";
 import AwaitingTablePanel from "./panels/AwaitingTablePanel.vue";
 import KpiSummaryPanel from "./panels/KpiSummaryPanel.vue";
 import VendorBreakdownPanel from "./panels/VendorBreakdownPanel.vue";
+import InboxListPanel from "./panels/InboxListPanel.vue";
 
 const props = defineProps({
   token: { type: String, required: true },
@@ -30,6 +31,7 @@ const KIND_TO_COMPONENT = {
   awaiting_table: AwaitingTablePanel,
   kpi_summary: KpiSummaryPanel,
   vendor_breakdown: VendorBreakdownPanel,
+  inbox_list: InboxListPanel,
 };
 
 function componentFor(kind) {

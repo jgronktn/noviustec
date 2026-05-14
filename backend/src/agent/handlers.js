@@ -271,6 +271,77 @@ export async function runTool(name, input) {
       };
     }
 
+    case "show_inbox_list": {
+      const status = args.status ?? "all";
+      const rows = await listPending({ status });
+      // Decorate with source kind (email vs upload) inferred from source_file
+      // naming. Sort newest-first by received_at.
+      const enriched = rows
+        .map((r) => {
+          const sf = r.source_file ?? "";
+          const source_kind = sf.startsWith("upload-")
+            ? "upload"
+            : sf.startsWith("inbound-")
+              ? "email"
+              : "other";
+          return {
+            id: r.id,
+            status: r.status,
+            received_at: r.received_at
+              ? (typeof r.received_at === "string"
+                  ? r.received_at
+                  : new Date(r.received_at).toISOString())
+              : null,
+            vendor: r.vendor,
+            date: isoDate(r.date),
+            total: r.total,
+            currency: r.currency ?? "USD",
+            reference_number: r.reference_number ?? null,
+            reference_kind: r.reference_kind ?? null,
+            suggested_category: r.suggested_category ?? null,
+            confidence: r.confidence ?? null,
+            resolution_notes: r.resolution_notes ?? null,
+            source_kind,
+          };
+        })
+        .sort((a, b) => (b.received_at ?? "").localeCompare(a.received_at ?? ""));
+      const HARD_CAP = 100;
+      const requested = Math.min(
+        Number.isInteger(args.limit) && args.limit > 0 ? args.limit : HARD_CAP,
+        HARD_CAP,
+      );
+      const truncated = enriched.length > requested;
+      const view = enriched.slice(0, requested);
+      const counts = enriched.reduce(
+        (acc, r) => {
+          acc[r.status] = (acc[r.status] ?? 0) + 1;
+          return acc;
+        },
+        { pending: 0, approved: 0, rejected: 0 },
+      );
+      const title =
+        args.title ??
+        (status === "all" ? "Inbox · all items" : `Inbox · ${status}`);
+      return {
+        __panel: {
+          kind: "inbox_list",
+          title,
+          props: {
+            status_filter: status,
+            count: enriched.length,
+            shown: view.length,
+            truncated,
+            counts,
+            entries: view,
+          },
+        },
+        count: enriched.length,
+        shown: view.length,
+        truncated,
+        counts,
+      };
+    }
+
     case "show_vendor_breakdown": {
       const rows = await listTransactions({
         from: args.from,
