@@ -65,7 +65,9 @@ function confidenceClass(c) {
       </div>
     </header>
 
-    <UploadCard :token="token" @uploaded="load" />
+    <div class="upload-wrap">
+      <UploadCard :token="token" @uploaded="load" />
+    </div>
 
     <p v-if="error" class="error">{{ error }}</p>
 
@@ -109,7 +111,19 @@ function confidenceClass(c) {
 
 <style scoped>
 .inbox {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
   padding: 0.75rem;
+  box-sizing: border-box;
+}
+
+/* Header + upload zone stay pinned; only .entries scrolls. */
+.head,
+.upload-wrap,
+.error {
+  flex: 0 0 auto;
 }
 
 .head {
@@ -117,6 +131,12 @@ function confidenceClass(c) {
   align-items: center;
   justify-content: space-between;
   margin-bottom: 0.75rem;
+}
+
+.upload-wrap {
+  /* Cancels the bottom margin UploadCard ships with so the gap between
+     it and the list stays tight in a sidebar context. */
+  margin-bottom: 0;
 }
 
 h2 {
@@ -154,6 +174,10 @@ h2 {
 }
 
 .empty {
+  flex: 1 1 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
   text-align: center;
   color: var(--text-muted);
   padding: 1.5rem 0.5rem;
@@ -161,6 +185,10 @@ h2 {
 }
 
 .entries {
+  /* Take all remaining vertical space, scroll independently. */
+  flex: 1 1 0;
+  min-height: 0;
+  overflow-y: auto;
   list-style: none;
   margin: 0;
   padding: 0;

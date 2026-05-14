@@ -109,7 +109,8 @@ function closeReview() {
 }
 
 .inbox-pane {
-  overflow-y: auto;
+  /* Inner InboxPanel owns its own scroll region (only the list scrolls;
+     header + upload zone stay pinned). The pane itself just clips. */
   border-bottom: 1px solid var(--border);
 }
 
