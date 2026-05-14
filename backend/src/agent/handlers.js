@@ -116,6 +116,16 @@ async function computePnl({ from, to }) {
   };
 }
 
+// Case-insensitive substring vendor match. Lets the user say "Anthropic"
+// and find rows stored as "Anthropic, PBC", or "kroger" → "Kroger". Used
+// by every show_* tool that takes a vendor filter — exact-match was a
+// footgun whenever a vendor's stored name had extra suffixes or commas.
+function vendorMatches(rowVendor, query) {
+  if (!query) return true;
+  if (!rowVendor) return false;
+  return rowVendor.toLowerCase().includes(query.toLowerCase());
+}
+
 function describeFilters({ from, to, category, payment_source, vendor }) {
   const parts = [];
   if (from && to) parts.push(`${from} – ${to}`);
@@ -152,7 +162,8 @@ export async function runTool(name, input) {
     }
     case "list_awaiting_payment": {
       let rows = await listAwaiting({ status: args.status ?? "awaiting" });
-      if (args.vendor) rows = rows.filter((r) => r.vendor === args.vendor);
+      if (args.vendor)
+        rows = rows.filter((r) => vendorMatches(r.vendor, args.vendor));
       return { count: rows.length, entries: rows.map(scrubAwaiting) };
     }
     case "get_pnl": {
@@ -201,7 +212,8 @@ export async function runTool(name, input) {
         payment_source: args.payment_source,
       });
       let filtered = rows;
-      if (args.vendor) filtered = filtered.filter((r) => r.vendor === args.vendor);
+      if (args.vendor)
+        filtered = filtered.filter((r) => vendorMatches(r.vendor, args.vendor));
       const truncated = filtered.length > TXN_TABLE_LIMIT;
       const view = filtered.slice(0, TXN_TABLE_LIMIT).map(scrubTransaction);
       const filterDesc = describeFilters(args);
@@ -240,7 +252,8 @@ export async function runTool(name, input) {
 
     case "show_awaiting_table": {
       let rows = await listAwaiting({ status: "awaiting" });
-      if (args.vendor) rows = rows.filter((r) => r.vendor === args.vendor);
+      if (args.vendor)
+        rows = rows.filter((r) => vendorMatches(r.vendor, args.vendor));
       const today = new Date().toISOString().slice(0, 10);
       const entries = rows.map((r) => {
         const scrubbed = scrubAwaiting(r);
@@ -302,7 +315,7 @@ export async function runTool(name, input) {
           docs = docs.filter((d) => d.reference_kind === kindFilter);
         }
         if (args.vendor) {
-          docs = docs.filter((d) => d.vendor === args.vendor);
+          docs = docs.filter((d) => vendorMatches(d.vendor, args.vendor));
         }
         if (args.from) {
           docs = docs.filter(
