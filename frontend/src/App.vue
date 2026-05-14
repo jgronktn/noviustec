@@ -4,6 +4,12 @@ import TokenGate from "./components/TokenGate.vue";
 import InboxPanel from "./components/InboxPanel.vue";
 import ReviewPanel from "./components/ReviewPanel.vue";
 
+// Injected by vite.config.js at build time. Hover the badge to see when
+// the bundle was built; the value is the short git SHA (with a "+" suffix
+// if the working tree was dirty at build time).
+const BUILD_SHA = __BUILD_SHA__;
+const BUILD_TIME = __BUILD_TIME__;
+
 const STORAGE_KEY = "noviustec_token";
 
 const token = ref(localStorage.getItem(STORAGE_KEY) || "");
@@ -41,7 +47,7 @@ function backToInbox() {
       <div class="brand">
         <span class="logo">◐</span>
         <span class="name">Noviustec</span>
-        <span class="env">v0.1</span>
+        <span class="env" :title="`Built ${BUILD_TIME}`">{{ BUILD_SHA }}</span>
       </div>
       <div class="actions">
         <button v-if="token" @click="logout" class="ghost">Sign out</button>
