@@ -39,11 +39,21 @@ function getForm(id, awaiting) {
       category: "",
       payment_source: "",
       reference_number: "",
+      reference_kind: "confirmation",
       notes: "",
     });
   }
   return formState.value.get(id);
 }
+
+const REFERENCE_KINDS = [
+  { value: "confirmation", label: "Confirmation #" },
+  { value: "transaction", label: "Check / Transaction #" },
+  { value: "receipt", label: "Receipt #" },
+  { value: "invoice", label: "Invoice #" },
+  { value: "order", label: "Order #" },
+  { value: "other", label: "Other" },
+];
 
 // Lazily fetch chart-of-accounts / payment-source dropdowns the first
 // time the user opens any form on this panel.
@@ -110,7 +120,7 @@ async function submit(awaiting) {
       category: form.category,
       payment_source: form.payment_source,
       reference_number: form.reference_number || null,
-      reference_kind: form.reference_number ? "confirmation" : null,
+      reference_kind: form.reference_number ? form.reference_kind : null,
       notes: form.notes || "",
     });
     setState(id, { open: false, paid: true });
@@ -220,13 +230,23 @@ const unpaidTotal = computed(() =>
                         </option>
                       </select>
                     </label>
-                    <label>
-                      <span>Reference (optional)</span>
+                    <label class="ref-number">
+                      <span>Reference number</span>
                       <input
                         type="text"
                         v-model="getForm(e.id, e).reference_number"
-                        placeholder="check # / last 4 / confirmation"
+                        placeholder="check # / confirmation / last 4"
                       />
+                    </label>
+                    <label class="ref-kind">
+                      <span>Reference type</span>
+                      <select v-model="getForm(e.id, e).reference_kind">
+                        <option
+                          v-for="k in REFERENCE_KINDS"
+                          :key="k.value"
+                          :value="k.value"
+                        >{{ k.label }}</option>
+                      </select>
                     </label>
                   </div>
                   <label class="notes">
