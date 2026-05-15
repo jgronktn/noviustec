@@ -67,16 +67,18 @@ const renderItems = computed(() => {
   };
 
   for (const row of props.data.rows) {
-    // The TODAY marker sits above the first row whose date is on or
-    // before today — i.e. it separates future rows (above) from past
-    // rows (below). For all-past data it lands at the very top.
-    if (!todayInserted && row.date <= todayIso.value) {
-      insertToday();
-    }
     const month = (row.date || "").slice(0, 7);
+    // Month tick first so the latest month label sits above the TODAY
+    // marker (e.g. "May 2026" then "TODAY · 2026-05-15" then the May rows).
     if (month && month !== lastMonth) {
       out.push({ type: "tick", month, key: `tick-${month}` });
       lastMonth = month;
+    }
+    // The TODAY marker sits above the first row whose date is on or
+    // before today — i.e. it separates future rows (above) from past
+    // rows (below). For all-past data it lands just under the top tick.
+    if (!todayInserted && row.date <= todayIso.value) {
+      insertToday();
     }
     out.push({ type: "row", row, key: `row-${row.date}` });
   }
@@ -105,11 +107,18 @@ const renderItems = computed(() => {
 
     <div v-else class="vt-timeline">
       <template v-for="item in renderItems" :key="item.key">
-        <!-- Today marker -->
+        <!-- Today marker: solid red dot on the axis, label to the right -->
         <div v-if="item.type === 'today'" class="vt-today">
-          <span class="vt-today-bar" />
-          <span class="vt-today-label">TODAY · {{ item.date }}</span>
-          <span class="vt-today-bar" />
+          <div class="vt-side vt-left" />
+          <div class="vt-axis">
+            <div class="vt-today-dot" />
+          </div>
+          <div class="vt-side vt-right">
+            <span class="vt-today-label">
+              <span class="vt-today-word">TODAY</span>
+              <span class="vt-today-date">{{ item.date }}</span>
+            </span>
+          </div>
         </div>
 
         <!-- Month boundary tick -->
@@ -263,32 +272,49 @@ const renderItems = computed(() => {
 /* ── Today marker ──────────────────────────────────────────────────── */
 .vt-today {
   display: grid;
-  grid-template-columns: 1fr auto 1fr;
+  grid-template-columns: 1fr 110px 1fr;
   align-items: center;
-  gap: 0.5rem;
-  padding: 0.5rem 0;
+  padding: 0.4rem 0;
   position: relative;
   z-index: 2;
 }
 
-.vt-today-bar {
-  height: 2px;
+/* Solid red dot on the axis — mirrors the .vt-dot shape but fully filled. */
+.vt-today-dot {
+  width: 11px;
+  height: 11px;
+  border-radius: 50%;
   background: var(--danger);
-  width: 100%;
+  border: 2px solid var(--danger);
+  box-shadow: 0 0 0 3px rgba(220, 38, 38, 0.18);
 }
 
 .vt-today-label {
-  font-family: var(--font-mono);
-  font-size: 0.7rem;
-  font-weight: 700;
-  letter-spacing: 0.08em;
-  color: #fff;
-  background: var(--danger);
-  padding: 2px 10px;
-  border-radius: 10px;
-  border: 1px solid var(--danger);
+  display: inline-flex;
+  align-items: baseline;
+  gap: 0.45rem;
+  padding-left: 0.6rem; /* aligns with the side gutter spacing */
   white-space: nowrap;
-  box-shadow: 0 1px 3px rgba(220, 38, 38, 0.25);
+}
+
+.vt-today-word {
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  color: var(--danger);
+}
+
+.vt-today-date {
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  color: var(--text-muted);
+}
+
+@media (max-width: 720px) {
+  .vt-today {
+    grid-template-columns: 1fr 80px 1fr;
+  }
 }
 
 /* ── Data row ──────────────────────────────────────────────────────── */
