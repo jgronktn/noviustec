@@ -15,7 +15,32 @@ const openPaymentDialog = inject("openPaymentDialog", null);
 // and would otherwise stay stale until the user re-asks.
 const locallyPaid = ref(new Set());
 
-function isClickable(ev) {
+// Active pair highlight: click an invoice/receipt card or its payment
+// card and the other side lights up. Set null to clear.
+const highlightedLinkId = ref(null);
+
+// link_id → number of cards sharing it. >1 means there's an actual pair
+// to highlight (otherwise the click would just highlight the clicked
+// card alone, which is pointless).
+const linkCounts = computed(() => {
+  const m = new Map();
+  for (const row of props.data.rows) {
+    for (const ev of [...row.left, ...row.right]) {
+      if (ev.link_id) m.set(ev.link_id, (m.get(ev.link_id) ?? 0) + 1);
+    }
+  }
+  return m;
+});
+
+function hasLinkedSibling(ev) {
+  return !!ev.link_id && (linkCounts.value.get(ev.link_id) ?? 0) > 1;
+}
+
+function isLinkedActive(ev) {
+  return !!ev.link_id && ev.link_id === highlightedLinkId.value;
+}
+
+function isPayClickable(ev) {
   return (
     openPaymentDialog != null &&
     ev.source === "awaiting" &&
@@ -24,24 +49,34 @@ function isClickable(ev) {
   );
 }
 
+function isCardInteractive(ev) {
+  return isPayClickable(ev) || hasLinkedSibling(ev);
+}
+
 function effectiveStatus(ev) {
   return locallyPaid.value.has(ev.id) ? "paid" : ev.status;
 }
 
 async function handleCardClick(ev) {
-  if (!isClickable(ev)) return;
-  const paid = await openPaymentDialog({
-    id: ev.id,
-    vendor: ev.vendor,
-    amount: ev.amount,
-    currency: ev.currency,
-    reference_number: ev.reference_number,
-    date: ev.date,
-  });
-  if (paid) {
-    const next = new Set(locallyPaid.value);
-    next.add(ev.id);
-    locallyPaid.value = next;
+  if (isPayClickable(ev)) {
+    const paid = await openPaymentDialog({
+      id: ev.id,
+      vendor: ev.vendor,
+      amount: ev.amount,
+      currency: ev.currency,
+      reference_number: ev.reference_number,
+      date: ev.date,
+    });
+    if (paid) {
+      const next = new Set(locallyPaid.value);
+      next.add(ev.id);
+      locallyPaid.value = next;
+    }
+    return;
+  }
+  if (hasLinkedSibling(ev)) {
+    highlightedLinkId.value =
+      highlightedLinkId.value === ev.link_id ? null : ev.link_id;
   }
 }
 
@@ -212,9 +247,10 @@ const monthGroups = computed(() => {
               class="vt-card vt-card-left"
               :class="[
                 invStatusClass(effectiveStatus(ev)),
-                { 'vt-card-clickable': isClickable(ev) },
+                { 'vt-card-clickable': isCardInteractive(ev) },
+                { 'vt-card-linked': isLinkedActive(ev) },
               ]"
-              :title="isClickable(ev) ? 'Click to record payment' : (ev.description || '')"
+              :title="isPayClickable(ev) ? 'Click to record payment' : (hasLinkedSibling(ev) ? 'Click to highlight linked payment' : (ev.description || ''))"
               @click="handleCardClick(ev)"
             >
               <span class="vt-card-kind">{{ kindLabel(ev.kind) }}</span>
@@ -246,7 +282,12 @@ const monthGroups = computed(() => {
               v-for="ev in item.row.right"
               :key="ev.id"
               class="vt-card vt-card-right"
-              :title="ev.description || ''"
+              :class="[
+                { 'vt-card-clickable': hasLinkedSibling(ev) },
+                { 'vt-card-linked': isLinkedActive(ev) },
+              ]"
+              :title="hasLinkedSibling(ev) ? 'Click to highlight linked invoice' : (ev.description || '')"
+              @click="handleCardClick(ev)"
             >
               <span class="vt-card-kind">{{ kindLabel(ev.kind) }}</span>
               <span v-if="data.is_global" class="vt-card-vendor">{{ ev.vendor }}</span>
@@ -556,6 +597,19 @@ const monthGroups = computed(() => {
 .vt-card-clickable:hover {
   box-shadow: 0 2px 6px rgba(0, 0, 0, 0.1);
   border-color: var(--accent);
+}
+
+/* Pair-highlight: clicking an invoice/receipt card or its payment card
+   lights up every card sharing the same link_id. Wins over the resting
+   color so the link is unmistakable. */
+.vt-card-linked {
+  border-color: var(--accent) !important;
+  box-shadow:
+    0 0 0 2px var(--accent),
+    0 4px 10px rgba(59, 130, 246, 0.18);
+  transform: translateY(-1px);
+  z-index: 3;
+  position: relative;
 }
 
 .vt-card-just-paid {

@@ -177,6 +177,12 @@ export async function buildTimelineProps({ vendor = null, from, to } = {}) {
   };
 
   // Left-side events (document side: invoices and receipts).
+  //
+  // Each event carries a `link_id` that groups it with the payment card
+  // (and any sibling receipt/invoice card) for the same underlying GL
+  // transaction. The frontend uses this to highlight invoice ↔ payment
+  // pairs when the user clicks either side. link_id is null when there's
+  // no payment yet (unpaid invoice).
   const leftEvents = [];
 
   for (const r of matchedAwaiting) {
@@ -208,6 +214,7 @@ export async function buildTimelineProps({ vendor = null, from, to } = {}) {
           : new Date(r.paid_at).toISOString().slice(0, 10)
         : null,
       paid_txn_id: r.paid_txn_id ?? null,
+      link_id: r.paid_txn_id ?? null,
       description: r.description ?? "",
       vendor: r.vendor,
       source: "awaiting",
@@ -229,6 +236,7 @@ export async function buildTimelineProps({ vendor = null, from, to } = {}) {
       days_outstanding: null,
       paid_at: date,
       paid_txn_id: r.id,
+      link_id: r.id,
       description: r.description ?? "",
       vendor: r.vendor,
       source: "gl",
@@ -247,6 +255,7 @@ export async function buildTimelineProps({ vendor = null, from, to } = {}) {
     category: r.category ?? null,
     payment_source: r.payment_source ?? null,
     vendor: r.vendor,
+    link_id: r.id,
   }));
 
   const dateSet = new Set([
