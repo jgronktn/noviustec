@@ -48,17 +48,41 @@ function kindLabel(kind) {
 
 // Interleave month boundary ticks between data rows so a small horizontal
 // label divides activity by month. Rows are already newest-first; the
-// first row of each month gets a tick rendered above it.
+// first row of each month gets a tick rendered above it. We also slot a
+// red TODAY marker at the boundary between future and past activity
+// (which, for typical ledger data, means at the very top).
+const todayIso = computed(
+  () => props.data.summary?.as_of || new Date().toISOString().slice(0, 10),
+);
+
 const renderItems = computed(() => {
   const out = [];
   let lastMonth = null;
+  let todayInserted = false;
+
+  const insertToday = () => {
+    if (todayInserted) return;
+    out.push({ type: "today", date: todayIso.value, key: "today" });
+    todayInserted = true;
+  };
+
   for (const row of props.data.rows) {
+    // The TODAY marker sits above the first row whose date is on or
+    // before today — i.e. it separates future rows (above) from past
+    // rows (below). For all-past data it lands at the very top.
+    if (!todayInserted && row.date <= todayIso.value) {
+      insertToday();
+    }
     const month = (row.date || "").slice(0, 7);
     if (month && month !== lastMonth) {
       out.push({ type: "tick", month, key: `tick-${month}` });
       lastMonth = month;
     }
     out.push({ type: "row", row, key: `row-${row.date}` });
+  }
+  // All rows are future-dated: drop the marker at the bottom.
+  if (!todayInserted && props.data.rows.length > 0) {
+    insertToday();
   }
   return out;
 });
@@ -81,8 +105,15 @@ const renderItems = computed(() => {
 
     <div v-else class="vt-timeline">
       <template v-for="item in renderItems" :key="item.key">
+        <!-- Today marker -->
+        <div v-if="item.type === 'today'" class="vt-today">
+          <span class="vt-today-bar" />
+          <span class="vt-today-label">TODAY · {{ item.date }}</span>
+          <span class="vt-today-bar" />
+        </div>
+
         <!-- Month boundary tick -->
-        <div v-if="item.type === 'tick'" class="vt-tick">
+        <div v-else-if="item.type === 'tick'" class="vt-tick">
           <span class="vt-tick-bar" />
           <span class="vt-tick-label">{{ shortMonth(item.month) }}</span>
           <span class="vt-tick-bar" />
@@ -227,6 +258,37 @@ const renderItems = computed(() => {
   border-radius: 10px;
   border: 1px solid var(--border);
   white-space: nowrap;
+}
+
+/* ── Today marker ──────────────────────────────────────────────────── */
+.vt-today {
+  display: grid;
+  grid-template-columns: 1fr auto 1fr;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.5rem 0;
+  position: relative;
+  z-index: 2;
+}
+
+.vt-today-bar {
+  height: 2px;
+  background: var(--danger);
+  width: 100%;
+}
+
+.vt-today-label {
+  font-family: var(--font-mono);
+  font-size: 0.7rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  color: #fff;
+  background: var(--danger);
+  padding: 2px 10px;
+  border-radius: 10px;
+  border: 1px solid var(--danger);
+  white-space: nowrap;
+  box-shadow: 0 1px 3px rgba(220, 38, 38, 0.25);
 }
 
 /* ── Data row ──────────────────────────────────────────────────────── */
