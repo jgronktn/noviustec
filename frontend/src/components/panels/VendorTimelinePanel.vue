@@ -1,9 +1,49 @@
 <script setup>
-import { computed } from "vue";
+import { computed, ref, inject } from "vue";
 
 const props = defineProps({
   data: { type: Object, required: true },
 });
+
+// Provided by App.vue. Returns a Promise<boolean> — true on submit,
+// false on cancel. Optional so the component still renders fine in
+// contexts where the dialog isn't mounted.
+const openPaymentDialog = inject("openPaymentDialog", null);
+
+// Locally-recorded paid awaitings so the card visually flips to "paid"
+// after the dialog resolves — the panel's incoming data is a snapshot
+// and would otherwise stay stale until the user re-asks.
+const locallyPaid = ref(new Set());
+
+function isClickable(ev) {
+  return (
+    openPaymentDialog != null &&
+    ev.source === "awaiting" &&
+    !locallyPaid.value.has(ev.id) &&
+    (ev.status === "awaiting" || ev.status === "overdue")
+  );
+}
+
+function effectiveStatus(ev) {
+  return locallyPaid.value.has(ev.id) ? "paid" : ev.status;
+}
+
+async function handleCardClick(ev) {
+  if (!isClickable(ev)) return;
+  const paid = await openPaymentDialog({
+    id: ev.id,
+    vendor: ev.vendor,
+    amount: ev.amount,
+    currency: ev.currency,
+    reference_number: ev.reference_number,
+    date: ev.date,
+  });
+  if (paid) {
+    const next = new Set(locallyPaid.value);
+    next.add(ev.id);
+    locallyPaid.value = next;
+  }
+}
 
 function fmt(amount, currency = "USD") {
   if (amount == null) return "—";
@@ -170,8 +210,12 @@ const monthGroups = computed(() => {
               v-for="ev in item.row.left"
               :key="ev.id"
               class="vt-card vt-card-left"
-              :class="invStatusClass(ev.status)"
-              :title="ev.description || ''"
+              :class="[
+                invStatusClass(effectiveStatus(ev)),
+                { 'vt-card-clickable': isClickable(ev) },
+              ]"
+              :title="isClickable(ev) ? 'Click to record payment' : (ev.description || '')"
+              @click="handleCardClick(ev)"
             >
               <span class="vt-card-kind">{{ kindLabel(ev.kind) }}</span>
               <span v-if="data.is_global" class="vt-card-vendor">{{ ev.vendor }}</span>
@@ -180,11 +224,14 @@ const monthGroups = computed(() => {
               </span>
               <span class="vt-card-amount">{{ fmt(ev.amount, ev.currency) }}</span>
               <span
-                v-if="ev.status === 'awaiting' || ev.status === 'overdue'"
+                v-if="effectiveStatus(ev) === 'awaiting' || effectiveStatus(ev) === 'overdue'"
                 class="vt-card-age"
               >
                 {{ ev.days_outstanding }}d
-                <template v-if="ev.status === 'overdue'">overdue</template>
+                <template v-if="effectiveStatus(ev) === 'overdue'">overdue</template>
+              </span>
+              <span v-if="locallyPaid.has(ev.id)" class="vt-card-just-paid">
+                ✓ Paid
               </span>
             </div>
           </div>
@@ -500,6 +547,23 @@ const monthGroups = computed(() => {
 .vt-card:hover {
   transform: translateY(-1px);
   box-shadow: 0 2px 4px rgba(0, 0, 0, 0.06);
+}
+
+.vt-card-clickable {
+  cursor: pointer;
+}
+
+.vt-card-clickable:hover {
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.1);
+  border-color: var(--accent);
+}
+
+.vt-card-just-paid {
+  font-size: 0.65rem;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  color: var(--ok);
+  flex-shrink: 0;
 }
 
 /* Invoice / receipt color coding (subtle) */

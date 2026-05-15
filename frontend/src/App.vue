@@ -4,6 +4,7 @@ import TokenGate from "./components/TokenGate.vue";
 import InboxPanel from "./components/InboxPanel.vue";
 import PromptPanel from "./components/PromptPanel.vue";
 import DashboardPanel from "./components/DashboardPanel.vue";
+import RecordPaymentDialog from "./components/RecordPaymentDialog.vue";
 import { fetchMainTimeline } from "./api.js";
 
 // Injected by vite.config.js at build time. Hover the badge to see when
@@ -22,6 +23,35 @@ const inboxKey = ref(0); // bump to force InboxPanel reload after approve/reject
 // download buttons) without prop-drilling. Provide the ref itself so
 // updates propagate after sign-in / sign-out.
 provide("apiToken", token);
+
+// ── Record-payment dialog ──────────────────────────────────────────────
+// Mounted at App level so any panel can trigger it without owning its
+// own modal state. Panels inject `openPaymentDialog` and call it with
+// an awaiting row; the returned Promise resolves to true on success and
+// false on cancel, so the caller can update its own local state (e.g.
+// mark a card as paid).
+const paymentDialogAwaiting = ref(null);
+let paymentDialogResolver = null;
+
+function openPaymentDialog(awaiting) {
+  return new Promise((resolve) => {
+    paymentDialogAwaiting.value = awaiting;
+    paymentDialogResolver = resolve;
+  });
+}
+provide("openPaymentDialog", openPaymentDialog);
+
+function handlePaymentSuccess() {
+  paymentDialogResolver?.(true);
+  paymentDialogResolver = null;
+  paymentDialogAwaiting.value = null;
+}
+
+function handlePaymentCancel() {
+  paymentDialogResolver?.(false);
+  paymentDialogResolver = null;
+  paymentDialogAwaiting.value = null;
+}
 
 // Agent-pushed canvas panels. Newest on top. Persists across review-panel
 // toggles — agent panels stay parked while the user reviews a pending row.
@@ -154,6 +184,13 @@ watch(token, (next, prev) => {
       </section>
     </main>
   </div>
+
+  <RecordPaymentDialog
+    v-if="paymentDialogAwaiting"
+    :awaiting="paymentDialogAwaiting"
+    @success="handlePaymentSuccess"
+    @cancel="handlePaymentCancel"
+  />
 </template>
 
 <style scoped>
