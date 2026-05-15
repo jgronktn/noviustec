@@ -26,3 +26,9 @@ export {
   markAwaitingPaid,
   findMatchCandidates,
 } from "./awaiting.js";
+export {
+  addStatement,
+  listStatements,
+  getStatement,
+  listStatementLines,
+} from "./statements.js";

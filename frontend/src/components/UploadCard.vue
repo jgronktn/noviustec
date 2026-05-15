@@ -1,9 +1,17 @@
 <script setup>
-import { ref } from "vue";
-import { uploadReceipt } from "../api.js";
+import { ref, computed } from "vue";
+import { uploadReceipt, uploadStatement } from "../api.js";
 
 const props = defineProps({ token: { type: String, required: true } });
 const emit = defineEmits(["uploaded"]);
+
+const kind = ref("receipt"); // "receipt" | "statement"
+const isStatement = computed(() => kind.value === "statement");
+const descPlaceholder = computed(() =>
+  isStatement.value
+    ? "optional context (account nickname)"
+    : "optional context (e.g. lunch with X)",
+);
 
 const SUPPORTED_TYPES = [
   "application/pdf",
@@ -76,11 +84,14 @@ async function upload() {
   error.value = null;
   lastResult.value = null;
   try {
-    const res = await uploadReceipt(props.token, {
+    const payload = {
       file: file.value,
       description: description.value,
-    });
-    lastResult.value = res;
+    };
+    const res = isStatement.value
+      ? await uploadStatement(props.token, payload)
+      : await uploadReceipt(props.token, payload);
+    lastResult.value = { ...res, _kind: kind.value };
     file.value = null;
     description.value = "";
     emit("uploaded", res);
@@ -100,6 +111,25 @@ function formatSize(bytes) {
 
 <template>
   <div class="upload-card">
+    <div class="kind-toggle" role="tablist" aria-label="Upload kind">
+      <button
+        type="button"
+        role="tab"
+        :aria-selected="kind === 'receipt'"
+        :class="{ active: kind === 'receipt' }"
+        :disabled="uploading"
+        @click="kind = 'receipt'"
+      >Receipt / invoice</button>
+      <button
+        type="button"
+        role="tab"
+        :aria-selected="kind === 'statement'"
+        :class="{ active: kind === 'statement' }"
+        :disabled="uploading"
+        @click="kind = 'statement'"
+      >Bank / card statement</button>
+    </div>
+
     <div
       class="drop-zone"
       :class="{ active: dragOver, busy: uploading, 'has-file': file }"
@@ -117,12 +147,18 @@ function formatSize(bytes) {
       />
 
       <div v-if="uploading" class="state">
-        <p class="primary">Parsing receipt…</p>
-        <p class="hint">~5 seconds for the vision call</p>
+        <p class="primary">
+          {{ isStatement ? "Parsing statement…" : "Parsing receipt…" }}
+        </p>
+        <p class="hint">
+          {{ isStatement ? "Multi-page statements take 20–60 seconds." : "~5 seconds for the vision call" }}
+        </p>
       </div>
 
       <div v-else-if="!file" class="state">
-        <p class="primary">Drop a receipt here or click to pick</p>
+        <p class="primary">
+          {{ isStatement ? "Drop a bank/card statement PDF here or click to pick" : "Drop a receipt here or click to pick" }}
+        </p>
         <p class="hint">PDF or image (JPEG, PNG, WEBP, GIF) up to 20 MB. Large photos are compressed automatically.</p>
       </div>
 
@@ -130,10 +166,7 @@ function formatSize(bytes) {
         <p class="filename">{{ file.name }}</p>
         <p class="meta">{{ file.type }} · {{ formatSize(file.size) }}</p>
         <div class="actions" @click.stop>
-          <input
-            v-model="description"
-            placeholder="optional context (e.g. 'lunch with X')"
-          />
+          <input v-model="description" :placeholder="descPlaceholder" />
           <button @click="clearFile">Remove</button>
           <button @click="upload" class="primary">Upload &amp; parse</button>
         </div>
@@ -142,7 +175,7 @@ function formatSize(bytes) {
 
     <p v-if="error" class="error">{{ error }}</p>
 
-    <p v-if="lastResult" class="success">
+    <p v-if="lastResult && lastResult._kind !== 'statement'" class="success">
       Uploaded — parser returned
       <strong>{{ lastResult.status }}</strong
       ><span v-if="lastResult.reason"> ({{ lastResult.reason }})</span
@@ -153,12 +186,64 @@ function formatSize(bytes) {
         {{ lastResult.proposal.total.currency }}</span
       >
     </p>
+
+    <p v-else-if="lastResult && lastResult._kind === 'statement'" class="success">
+      Statement imported —
+      <strong>{{ lastResult.line_count }}</strong> line<span v-if="lastResult.line_count !== 1">s</span><span v-if="lastResult.source">
+        · {{ lastResult.source }}</span
+      ><span v-if="lastResult.period?.start && lastResult.period?.end">
+        · {{ lastResult.period.start }} → {{ lastResult.period.end }}</span
+      ><span v-if="lastResult.validation?.balance_check === 'mismatch'" class="warn">
+        · ⚠ balance check off by {{ lastResult.validation.balance_check_diff }}</span
+      >
+    </p>
   </div>
 </template>
 
 <style scoped>
 .upload-card {
   margin-bottom: 1.5rem;
+}
+
+.kind-toggle {
+  display: inline-flex;
+  gap: 0;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 2px;
+  margin-bottom: 0.5rem;
+}
+
+.kind-toggle button {
+  background: transparent;
+  border: none;
+  font-size: 0.78rem;
+  padding: 0.3rem 0.7rem;
+  border-radius: 4px;
+  color: var(--text-muted);
+  cursor: pointer;
+}
+
+.kind-toggle button:hover:not(:disabled):not(.active) {
+  background: #f5f5f0;
+  color: var(--text);
+}
+
+.kind-toggle button.active {
+  background: var(--accent);
+  color: white;
+  font-weight: 600;
+}
+
+.kind-toggle button:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.warn {
+  color: var(--warn);
+  font-weight: 600;
 }
 
 .drop-zone {

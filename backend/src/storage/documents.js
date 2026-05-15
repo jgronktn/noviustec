@@ -27,6 +27,75 @@ export function getCompaniesDir() {
   return COMPANIES_DIR;
 }
 
+/**
+ * Archive an uploaded bank/credit-card statement to:
+ *   companies/{companyId}/statements/{source-slug}/{statement-close-date}.{ext}
+ *
+ * Unlike receipts (which are vendor-organized), statements are organized
+ * by payment source — one folder per card/account — with the statement
+ * close date as the filename so multiple statements per source sort and
+ * resolve unambiguously.
+ *
+ * @param {object} params
+ * @param {string} params.companyId
+ * @param {string} params.source           - payment source name (Sources sheet)
+ * @param {string} params.statementDate    - YYYY-MM-DD (statement close date)
+ * @param {string} params.contentBase64    - base64 file bytes (from the upload payload)
+ * @param {string} params.contentType      - MIME (e.g. "application/pdf")
+ * @param {string} [params.originalFilename]
+ * @returns {Promise<{ document_path, absolute_path, filename }>}
+ */
+export async function archiveStatement({
+  companyId,
+  source,
+  statementDate,
+  contentBase64,
+  contentType,
+  originalFilename,
+}) {
+  const ext = EXT_BY_MIME.get(
+    String(contentType ?? "")
+      .toLowerCase()
+      .split(";")[0]
+      .trim(),
+  );
+  if (!ext) {
+    throw new Error(`Unsupported statement content type: ${contentType}`);
+  }
+  const sourceSlug = slugify(source) || "unknown-source";
+  const dir = path.join(COMPANIES_DIR, companyId, "statements", sourceSlug);
+  await fs.mkdir(dir, { recursive: true });
+
+  const dateKey =
+    statementDate && /^\d{4}-\d{2}-\d{2}$/.test(statementDate)
+      ? statementDate
+      : new Date().toISOString().slice(0, 10);
+  const filename = `${dateKey}.${ext}`;
+  const absolutePath = path.join(dir, filename);
+  await fs.writeFile(absolutePath, Buffer.from(contentBase64, "base64"));
+
+  return {
+    document_path: path.posix.join("statements", sourceSlug, filename),
+    absolute_path: absolutePath,
+    filename,
+    original_filename: originalFilename ?? null,
+  };
+}
+
+/**
+ * Resolve a statement document_path (relative to the company root) to an
+ * absolute filesystem path. Defends against path traversal — the resolved
+ * path must stay inside the company's statements/ tree.
+ */
+export function resolveStatementPath({ companyId, documentPath }) {
+  if (!documentPath || typeof documentPath !== "string") return null;
+  const companyRoot = path.join(COMPANIES_DIR, companyId);
+  const statementsRoot = path.join(companyRoot, "statements");
+  const absolute = path.resolve(companyRoot, documentPath);
+  if (!absolute.startsWith(statementsRoot + path.sep)) return null;
+  return absolute;
+}
+
 // Map MIME types we accept to filesystem extensions.
 const EXT_BY_MIME = new Map([
   ["application/pdf", "pdf"],

@@ -13,6 +13,8 @@ export const SHEETS = {
   GL: "GL",
   AWAITING: "AwaitingPayment",
   DOCUMENTS: "Documents",
+  STATEMENTS: "Statements",
+  STATEMENT_LINES: "StatementLines",
 };
 
 export const COLUMNS = {
@@ -98,6 +100,38 @@ export const COLUMNS = {
     { header: "Pending_ID", key: "pending_id", width: 16 },
     { header: "Created_At", key: "created_at", width: 22 },
     { header: "Awaiting_ID", key: "awaiting_id", width: 16 },
+  ],
+  [SHEETS.STATEMENTS]: [
+    { header: "ID", key: "id", width: 16 },
+    { header: "Status", key: "status", width: 18 }, // imported | needs_attention | reconciled | partially_reconciled
+    { header: "Source", key: "source", width: 32 }, // payment source (Sources sheet name)
+    { header: "Period_Start", key: "period_start", width: 12, style: { numFmt: "yyyy-mm-dd" } },
+    { header: "Period_End", key: "period_end", width: 12, style: { numFmt: "yyyy-mm-dd" } },
+    { header: "Statement_Date", key: "statement_date", width: 14, style: { numFmt: "yyyy-mm-dd" } },
+    { header: "Currency", key: "currency", width: 8 },
+    { header: "Opening_Balance", key: "opening_balance", width: 14, style: { numFmt: "#,##0.00" } },
+    { header: "Closing_Balance", key: "closing_balance", width: 14, style: { numFmt: "#,##0.00" } },
+    { header: "Total_Charges", key: "total_charges", width: 14, style: { numFmt: "#,##0.00" } },
+    { header: "Total_Payments", key: "total_payments", width: 14, style: { numFmt: "#,##0.00" } },
+    { header: "Transaction_Count", key: "transaction_count", width: 8 },
+    { header: "Document_Path", key: "document_path", width: 60 },
+    { header: "Original_Filename", key: "original_filename", width: 50 },
+    { header: "Source_File", key: "source_file", width: 50 },
+    { header: "Pending_ID", key: "pending_id", width: 16 },
+    { header: "Created_At", key: "created_at", width: 22 },
+    { header: "Notes", key: "notes", width: 50 },
+  ],
+  [SHEETS.STATEMENT_LINES]: [
+    { header: "ID", key: "id", width: 16 },
+    { header: "Statement_ID", key: "statement_id", width: 16 },
+    { header: "Line_Date", key: "line_date", width: 12, style: { numFmt: "yyyy-mm-dd" } },
+    { header: "Description", key: "description", width: 60 },
+    { header: "Amount", key: "amount", width: 12, style: { numFmt: "#,##0.00;(#,##0.00)" } }, // signed
+    { header: "Balance_After", key: "balance_after", width: 14, style: { numFmt: "#,##0.00" } },
+    { header: "Matched_TXN_ID", key: "matched_txn_id", width: 16 },
+    { header: "Match_Method", key: "match_method", width: 12 }, // auto | manual | null
+    { header: "Notes", key: "notes", width: 40 },
+    { header: "Created_At", key: "created_at", width: 22 },
   ],
 };
 

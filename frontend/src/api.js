@@ -167,6 +167,17 @@ export async function uploadReceipt(token, { file, description }) {
   });
 }
 
+/** Upload a bank or credit-card statement PDF for parsing + import. */
+export async function uploadStatement(token, { file, description }) {
+  const content_base64 = await fileToBase64(file);
+  return request(token, "POST", "/api/upload-statement", {
+    filename: file.name,
+    content_type: file.type,
+    content_base64,
+    description: description || "",
+  });
+}
+
 /**
  * Stream a chat turn from the bookkeeping agent. POSTs the full message
  * history and consumes the SSE response, invoking `onEvent` with each

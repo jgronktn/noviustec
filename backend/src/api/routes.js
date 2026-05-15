@@ -20,6 +20,7 @@ import {
   getLedgerPath,
   getDocument,
   getKnownVendors,
+  addStatement,
 } from "../ledger/index.js";
 import { parseReceipt } from "../parser/index.js";
 import {
@@ -28,7 +29,13 @@ import {
   SUPPORTED_UPLOAD_TYPES,
   MAX_UPLOAD_BYTES,
 } from "../processor.js";
-import { archiveAttachments, resolveDocumentPath } from "../storage/documents.js";
+import {
+  archiveAttachments,
+  resolveDocumentPath,
+  archiveStatement,
+  resolveStatementPath,
+} from "../storage/documents.js";
+import { parseStatement } from "../parser/statement/index.js";
 import {
   getTransaction,
   addDocument,
@@ -1091,6 +1098,241 @@ export default async function apiRoutes(fastify, opts) {
       };
     },
   );
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // POST /api/upload-statement — direct upload of a bank or credit-card
+  // statement PDF. Runs the statement parser, archives the PDF under
+  // companies/{id}/statements/{source-slug}/{close-date}.pdf, and writes a
+  // Statements row plus one StatementLines row per parsed transaction. No
+  // reconciliation here — that's a separate, later workflow.
+  // ─────────────────────────────────────────────────────────────────────────
+  fastify.post(
+    "/api/upload-statement",
+    {
+      schema: {
+        body: {
+          type: "object",
+          required: ["filename", "content_type", "content_base64"],
+          additionalProperties: false,
+          properties: {
+            filename: { type: "string", minLength: 1 },
+            content_type: { type: "string", minLength: 1 },
+            content_base64: { type: "string", minLength: 1 },
+            description: { type: "string" },
+          },
+        },
+      },
+    },
+    async (req, reply) => {
+      const { filename, content_type, content_base64, description } = req.body;
+
+      const ct = content_type.toLowerCase().split(";")[0].trim();
+      if (!SUPPORTED_UPLOAD_TYPES.has(ct)) {
+        return reply.code(400).send({
+          error: `Unsupported content type: ${content_type}. Allowed: ${[...SUPPORTED_UPLOAD_TYPES].join(", ")}`,
+        });
+      }
+
+      const decodedBytes = Math.floor((content_base64.length * 3) / 4);
+      if (decodedBytes > MAX_UPLOAD_BYTES) {
+        return reply.code(400).send({
+          error: `File too large: ${decodedBytes} bytes (max ${MAX_UPLOAD_BYTES})`,
+        });
+      }
+
+      // Persist a synthetic upload payload alongside receipts so the parser
+      // and any reparse step can rerun against it later.
+      const stamp = new Date().toISOString().replace(/[:.]/g, "-");
+      const sourceFilename = `statement-${stamp}.json`;
+      const payload = buildUploadPayload({
+        filename,
+        content_type,
+        content_base64,
+        description,
+      });
+      try {
+        await fs.writeFile(
+          path.join(logDir, sourceFilename),
+          JSON.stringify(payload, null, 2),
+        );
+      } catch (err) {
+        req.log.error(
+          { err, file: sourceFilename },
+          "failed to write statement upload payload",
+        );
+        return reply.code(500).send({ error: "Failed to persist upload" });
+      }
+
+      req.log.info(
+        {
+          file: sourceFilename,
+          filename,
+          content_type,
+          bytes: decodedBytes,
+        },
+        "statement upload received",
+      );
+
+      // Parse.
+      let parseResult;
+      try {
+        parseResult = await parseStatement(payload);
+      } catch (err) {
+        req.log.error({ err: err.message }, "statement parser threw");
+        return reply.code(500).send({
+          error: `Parser failed: ${err.message}`,
+          source_file: sourceFilename,
+        });
+      }
+
+      // Persist the parser output sidecar so future debugging / reparse
+      // doesn't need to re-invoke Anthropic.
+      const parsedPath = path.join(
+        logDir,
+        sourceFilename.replace(/\.json$/, "-parsed.json"),
+      );
+      await fs
+        .writeFile(parsedPath, JSON.stringify(parseResult, null, 2))
+        .catch((err) =>
+          req.log.error({ err }, "failed to write statement -parsed sidecar"),
+        );
+
+      if (parseResult.status !== "parsed" || !parseResult.extracted) {
+        return reply.code(200).send({
+          source_file: sourceFilename,
+          status: parseResult.status,
+          reason: parseResult.reason,
+          validation: parseResult.validation,
+        });
+      }
+
+      const ext = parseResult.extracted;
+      const sourceName =
+        ext.source?.name
+          ? ext.source.last4
+            ? `${ext.source.name} ••${ext.source.last4}`
+            : ext.source.name
+          : `Unknown source · ${stamp}`;
+
+      // Register the source so future Record-payment forms see it.
+      let canonicalSource = sourceName;
+      try {
+        const { name } = await ensurePaymentSource(sourceName);
+        if (name) canonicalSource = name;
+      } catch (err) {
+        req.log.error(
+          { err: err.message },
+          "ensurePaymentSource failed; falling back to raw name",
+        );
+      }
+
+      // Archive the PDF on disk.
+      let archive = null;
+      const statementDate =
+        ext.period?.statement_date ||
+        ext.period?.end ||
+        new Date().toISOString().slice(0, 10);
+      try {
+        archive = await archiveStatement({
+          companyId: COMPANY_ID,
+          source: canonicalSource,
+          statementDate,
+          contentBase64: content_base64,
+          contentType: ct,
+          originalFilename: filename,
+        });
+      } catch (err) {
+        req.log.error(
+          { err: err.message },
+          "statement archive failed; continuing without document_path",
+        );
+      }
+
+      // Persist to ledger.
+      const stmtId = await addStatement({
+        statement: {
+          source: canonicalSource,
+          period_start: ext.period?.start ?? null,
+          period_end: ext.period?.end ?? null,
+          statement_date: statementDate,
+          currency: ext.currency ?? "USD",
+          opening_balance: ext.balances?.opening ?? null,
+          closing_balance: ext.balances?.closing ?? null,
+          total_charges: ext.balances?.total_charges ?? null,
+          total_payments: ext.balances?.total_payments ?? null,
+          document_path: archive?.document_path ?? null,
+          original_filename: filename,
+          source_file: sourceFilename,
+          status:
+            parseResult.validation?.balance_check === "mismatch"
+              ? "needs_attention"
+              : "imported",
+          notes:
+            parseResult.validation?.balance_check === "mismatch"
+              ? `Balance check off by ${parseResult.validation.balance_check_diff}`
+              : "",
+        },
+        lines: ext.lines ?? [],
+      });
+
+      req.log.info(
+        {
+          statement_id: stmtId.id,
+          source: canonicalSource,
+          period: { from: ext.period?.start, to: ext.period?.end },
+          line_count: ext.lines?.length ?? 0,
+          validation: parseResult.validation,
+          usage: parseResult.usage,
+        },
+        "statement imported",
+      );
+
+      return {
+        statement_id: stmtId.id,
+        line_count: ext.lines?.length ?? 0,
+        source: canonicalSource,
+        period: ext.period,
+        balances: ext.balances,
+        validation: parseResult.validation,
+        document_path: archive?.document_path ?? null,
+        status:
+          parseResult.validation?.balance_check === "mismatch"
+            ? "needs_attention"
+            : "imported",
+      };
+    },
+  );
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // GET /api/documents/statement/:id — download an archived statement PDF.
+  // ─────────────────────────────────────────────────────────────────────────
+  fastify.get("/api/documents/statement/:id", async (req, reply) => {
+    const { getStatement } = await import("../ledger/index.js");
+    const stmt = await getStatement(req.params.id);
+    if (!stmt) return reply.code(404).send({ error: "Statement not found" });
+    if (!stmt.document_path) {
+      return reply.code(404).send({ error: "No archived document for this statement" });
+    }
+    const absolute = resolveStatementPath({
+      companyId: COMPANY_ID,
+      documentPath: stmt.document_path,
+    });
+    if (!absolute) return reply.code(400).send({ error: "Invalid document path" });
+    try {
+      const buffer = await fs.readFile(absolute);
+      const ext = path.extname(absolute).slice(1).toLowerCase();
+      const mime = MIME_BY_EXT[ext] || "application/octet-stream";
+      reply
+        .header("Content-Type", mime)
+        .header(
+          "Content-Disposition",
+          `inline; filename="${path.basename(absolute)}"`,
+        )
+        .send(buffer);
+    } catch {
+      return reply.code(404).send({ error: "Statement file missing on disk" });
+    }
+  });
 
   // ─────────────────────────────────────────────────────────────────────────
   // POST /api/agent/chat — bookkeeping agent (Sonnet 4.6 + read-only tools),
