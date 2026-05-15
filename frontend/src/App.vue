@@ -5,7 +5,7 @@ import InboxPanel from "./components/InboxPanel.vue";
 import PromptPanel from "./components/PromptPanel.vue";
 import DashboardPanel from "./components/DashboardPanel.vue";
 import RecordPaymentDialog from "./components/RecordPaymentDialog.vue";
-import { fetchMainTimeline } from "./api.js";
+import { fetchMainTimeline, fetchVendorTimeline } from "./api.js";
 
 // Injected by vite.config.js at build time. Hover the badge to see when
 // the bundle was built; the value is the short git SHA (with a "+" suffix
@@ -45,6 +45,9 @@ function handlePaymentSuccess() {
   paymentDialogResolver?.(true);
   paymentDialogResolver = null;
   paymentDialogAwaiting.value = null;
+  // A new GL row exists; refresh any visible timeline so the freshly-paid
+  // invoice flips status and the new payment card appears.
+  signalLedgerChange();
 }
 
 function handlePaymentCancel() {
@@ -100,6 +103,43 @@ function dismissPanel(id) {
 function clearPanels() {
   agentPanels.value = [];
 }
+
+// ── Ledger-change refresh ─────────────────────────────────────────────
+// Anywhere the user mutates the books (approving a pending entry, paying
+// an awaiting invoice, etc.) calls signalLedgerChange() via inject. The
+// handler refetches every timeline panel currently in the stack so it
+// reflects the new state without a page reload. Other panel kinds are
+// left alone — re-asking the agent is still the way to refresh them.
+async function refreshTimelinePanels() {
+  if (!token.value) return;
+  if (agentPanels.value.length === 0) return;
+  const next = await Promise.all(
+    agentPanels.value.map(async (p) => {
+      if (p.kind !== "vendor_timeline") return p;
+      try {
+        const vendor = p.props?.query || null;
+        const from = p.props?.period?.from || undefined;
+        const to = p.props?.period?.to || undefined;
+        const data = vendor
+          ? await fetchVendorTimeline(token.value, { vendor, from, to })
+          : await fetchMainTimeline(token.value);
+        return {
+          ...p,
+          title: data.title || p.title,
+          props: data.props,
+        };
+      } catch {
+        return p; // keep stale rather than blow up
+      }
+    }),
+  );
+  agentPanels.value = next;
+}
+
+function signalLedgerChange() {
+  refreshTimelinePanels();
+}
+provide("signalLedgerChange", signalLedgerChange);
 
 // ── Dashboard home screen ──────────────────────────────────────────────
 // On sign-in (token first appears), auto-load the global all-vendor

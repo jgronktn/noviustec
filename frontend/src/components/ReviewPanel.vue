@@ -1,5 +1,5 @@
 <script setup>
-import { ref, computed, onMounted } from "vue";
+import { ref, computed, onMounted, inject } from "vue";
 import {
   getPending,
   getCategories,
@@ -9,6 +9,10 @@ import {
   openPendingDocument,
   reparsePending,
 } from "../api.js";
+
+// App-provided ledger-change signal — fires after any successful
+// approval so the dashboard's timeline panels refetch without a reload.
+const signalLedgerChange = inject("signalLedgerChange", () => {});
 
 const REFERENCE_KINDS = [
   { value: "", label: "(none)" },
@@ -186,6 +190,7 @@ async function approve() {
       match_id: form.value.action === "match" ? form.value.match_id : null,
     };
     await approvePending(props.token, props.id, body);
+    signalLedgerChange();
     emit("back");
   } catch (e) {
     error.value = e.message;

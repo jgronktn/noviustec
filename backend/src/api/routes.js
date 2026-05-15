@@ -1059,6 +1059,40 @@ export default async function apiRoutes(fastify, opts) {
   );
 
   // ─────────────────────────────────────────────────────────────────────────
+  // GET /api/vendor-timeline?vendor=X — single-vendor timeline payload,
+  // shape-compatible with show_vendor_timeline. Used by the frontend to
+  // refetch a vendor timeline panel after a ledger mutation.
+  // ─────────────────────────────────────────────────────────────────────────
+  fastify.get(
+    "/api/vendor-timeline",
+    {
+      schema: {
+        querystring: {
+          type: "object",
+          required: ["vendor"],
+          properties: {
+            vendor: { type: "string", minLength: 1 },
+            from: { type: "string" },
+            to: { type: "string" },
+          },
+        },
+      },
+    },
+    async (req) => {
+      const props = await buildTimelineProps({
+        vendor: req.query.vendor,
+        from: req.query.from,
+        to: req.query.to,
+      });
+      return {
+        kind: "vendor_timeline",
+        title: `Timeline · ${props.vendor || req.query.vendor}`,
+        props,
+      };
+    },
+  );
+
+  // ─────────────────────────────────────────────────────────────────────────
   // POST /api/agent/chat — bookkeeping agent (Sonnet 4.6 + read-only tools),
   // streamed back as Server-Sent Events. Each event line is:
   //   data: {"type":"text_delta","text":"..."}

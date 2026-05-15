@@ -63,6 +63,15 @@ export const listAwaiting = (token, status = "awaiting") =>
 export const fetchMainTimeline = (token) =>
   request(token, "GET", "/api/main-timeline");
 
+/** Single-vendor timeline. Used by App.vue to refetch a vendor timeline
+ *  panel after a ledger mutation. */
+export function fetchVendorTimeline(token, { vendor, from, to } = {}) {
+  const params = new URLSearchParams({ vendor });
+  if (from) params.set("from", from);
+  if (to) params.set("to", to);
+  return request(token, "GET", `/api/vendor-timeline?${params.toString()}`);
+}
+
 /**
  * Record a manual payment against an outstanding AwaitingPayment row.
  * No receipt document required — for checks, credit-card charges with
