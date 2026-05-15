@@ -47,8 +47,18 @@ function closeReview() {
   inboxKey.value += 1;
 }
 
+// Panel kinds that take over the whole canvas — pushing one of these
+// clears the existing stack so the canvas isn't split. Vendor timelines
+// are dense vertical layouts that don't share well; other panels are
+// designed to coexist.
+const EXCLUSIVE_KINDS = new Set(["vendor_timeline"]);
+
 function onAgentPanel(panel) {
-  // Push to front — newest panels appear on top of the stack.
+  if (EXCLUSIVE_KINDS.has(panel.kind)) {
+    agentPanels.value = [panel];
+    return;
+  }
+  // Otherwise push to front — newest panels appear on top of the stack.
   agentPanels.value = [panel, ...agentPanels.value];
 }
 
