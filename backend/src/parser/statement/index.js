@@ -21,17 +21,24 @@ const BALANCE_TOLERANCE = 0.01;
 export async function parseStatement(payload, _options = {}) {
   const attachments = payload?.Attachments ?? [];
   // For statements we expect exactly one PDF; if there are multiple we
-  // process the largest (typical case: a single attachment though).
-  const supported = attachments.filter((a) => {
-    if (typeof a?.ContentType !== "string") return false;
+  // process the largest. Tag each with the `_kind` discriminator that
+  // buildContentBlocks expects — the receipt parser's triage step adds
+  // this automatically, but we bypass triage here.
+  const supported = [];
+  for (const a of attachments) {
+    if (typeof a?.ContentType !== "string") continue;
     const ct = a.ContentType.toLowerCase().split(";")[0].trim();
-    return (
-      ct === "application/pdf" ||
+    if (ct === "application/pdf") {
+      supported.push({ ...a, _kind: "pdf" });
+    } else if (
       ct === "image/jpeg" ||
       ct === "image/png" ||
-      ct === "image/webp"
-    );
-  });
+      ct === "image/webp" ||
+      ct === "image/gif"
+    ) {
+      supported.push({ ...a, _kind: "image" });
+    }
+  }
   if (supported.length === 0) {
     return baseResult({
       status: "no_content",

@@ -187,7 +187,10 @@ function formatSize(bytes) {
       >
     </p>
 
-    <p v-else-if="lastResult && lastResult._kind === 'statement'" class="success">
+    <p
+      v-else-if="lastResult && lastResult._kind === 'statement' && lastResult.statement_id"
+      class="success"
+    >
       Statement imported —
       <strong>{{ lastResult.line_count }}</strong> line<span v-if="lastResult.line_count !== 1">s</span><span v-if="lastResult.source">
         · {{ lastResult.source }}</span
@@ -196,6 +199,17 @@ function formatSize(bytes) {
       ><span v-if="lastResult.validation?.balance_check === 'mismatch'" class="warn">
         · ⚠ balance check off by {{ lastResult.validation.balance_check_diff }}</span
       >
+    </p>
+
+    <p
+      v-else-if="lastResult && lastResult._kind === 'statement'"
+      class="error"
+    >
+      Statement not imported — parser returned
+      <strong>{{ lastResult.status }}</strong
+      ><span v-if="lastResult.reason"> ({{ lastResult.reason }})</span>. Try a
+      different page range or check that the file is a full statement, not a
+      single transaction.
     </p>
   </div>
 </template>

@@ -1198,6 +1198,15 @@ export default async function apiRoutes(fastify, opts) {
         );
 
       if (parseResult.status !== "parsed" || !parseResult.extracted) {
+        req.log.info(
+          {
+            source_file: sourceFilename,
+            status: parseResult.status,
+            reason: parseResult.reason,
+            usage: parseResult.usage,
+          },
+          "statement parse did not produce extractable data",
+        );
         return reply.code(200).send({
           source_file: sourceFilename,
           status: parseResult.status,
