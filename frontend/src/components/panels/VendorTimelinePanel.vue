@@ -55,38 +55,45 @@ const todayIso = computed(
   () => props.data.summary?.as_of || new Date().toISOString().slice(0, 10),
 );
 
-const renderItems = computed(() => {
-  const out = [];
-  let lastMonth = null;
+// Group rows by month so each month becomes a wrapped section. The
+// section gets a CSS `min-height` to enforce at least 150px of vertical
+// distance between consecutive month tags, regardless of how few rows
+// the month contains. Within a section we also slot in the red TODAY
+// marker at the boundary between future and past activity.
+const monthGroups = computed(() => {
+  const groups = [];
+  let current = null;
   let todayInserted = false;
 
-  const insertToday = () => {
-    if (todayInserted) return;
-    out.push({ type: "today", date: todayIso.value, key: "today" });
-    todayInserted = true;
+  const ensureGroup = (month) => {
+    if (!current || current.month !== month) {
+      current = { month, key: `m-${month}`, items: [] };
+      groups.push(current);
+    }
+    return current;
   };
 
   for (const row of props.data.rows) {
     const month = (row.date || "").slice(0, 7);
-    // Month tick first so the latest month label sits above the TODAY
-    // marker (e.g. "May 2026" then "TODAY · 2026-05-15" then the May rows).
-    if (month && month !== lastMonth) {
-      out.push({ type: "tick", month, key: `tick-${month}` });
-      lastMonth = month;
-    }
-    // The TODAY marker sits above the first row whose date is on or
-    // before today — i.e. it separates future rows (above) from past
-    // rows (below). For all-past data it lands just under the top tick.
+    if (!month) continue;
+    const group = ensureGroup(month);
     if (!todayInserted && row.date <= todayIso.value) {
-      insertToday();
+      group.items.push({ type: "today", date: todayIso.value, key: "today" });
+      todayInserted = true;
     }
-    out.push({ type: "row", row, key: `row-${row.date}` });
+    group.items.push({ type: "row", row, key: `row-${row.date}` });
   }
-  // All rows are future-dated: drop the marker at the bottom.
-  if (!todayInserted && props.data.rows.length > 0) {
-    insertToday();
+
+  // All rows are future-dated → drop the TODAY marker at the bottom of
+  // the last (oldest = earliest in the future) group.
+  if (!todayInserted && groups.length > 0) {
+    groups[groups.length - 1].items.push({
+      type: "today",
+      date: todayIso.value,
+      key: "today",
+    });
   }
-  return out;
+  return groups;
 });
 </script>
 
@@ -112,30 +119,35 @@ const renderItems = computed(() => {
     </div>
 
     <div v-else class="vt-timeline">
-      <template v-for="item in renderItems" :key="item.key">
-        <!-- Today marker: solid red dot on the axis, label to the right -->
-        <div v-if="item.type === 'today'" class="vt-today">
-          <div class="vt-side vt-left" />
-          <div class="vt-axis">
-            <div class="vt-today-dot" />
-          </div>
-          <div class="vt-side vt-right">
-            <span class="vt-today-label">
-              <span class="vt-today-word">TODAY</span>
-              <span class="vt-today-date">{{ item.date }}</span>
-            </span>
-          </div>
-        </div>
-
-        <!-- Month boundary tick -->
-        <div v-else-if="item.type === 'tick'" class="vt-tick">
+      <section
+        v-for="group in monthGroups"
+        :key="group.key"
+        class="vt-month"
+      >
+        <!-- Month label sits at the top of its section -->
+        <div class="vt-tick">
           <span class="vt-tick-bar" />
-          <span class="vt-tick-label">{{ shortMonth(item.month) }}</span>
+          <span class="vt-tick-label">{{ shortMonth(group.month) }}</span>
           <span class="vt-tick-bar" />
         </div>
 
-        <!-- Data row: left = invoices/receipts, right = payments -->
-        <div v-else class="vt-row">
+        <template v-for="item in group.items" :key="item.key">
+          <!-- Today marker: solid red dot on the axis, label to the right -->
+          <div v-if="item.type === 'today'" class="vt-today">
+            <div class="vt-side vt-left" />
+            <div class="vt-axis">
+              <div class="vt-today-dot" />
+            </div>
+            <div class="vt-side vt-right">
+              <span class="vt-today-label">
+                <span class="vt-today-word">TODAY</span>
+                <span class="vt-today-date">{{ item.date }}</span>
+              </span>
+            </div>
+          </div>
+
+          <!-- Data row: left = invoices/receipts, right = payments -->
+          <div v-else class="vt-row">
           <div class="vt-side vt-left">
             <div
               v-for="ev in item.row.left"
@@ -182,7 +194,8 @@ const renderItems = computed(() => {
             </div>
           </div>
         </div>
-      </template>
+        </template>
+      </section>
     </div>
   </div>
 </template>
@@ -244,6 +257,17 @@ const renderItems = computed(() => {
   background: var(--border);
   transform: translateX(-50%);
   z-index: 0;
+}
+
+/* ── Month section ────────────────────────────────────────────────────
+   Each month is wrapped in a section so we can guarantee at least 150px
+   of vertical distance between consecutive month tags, regardless of
+   how few rows the month contains. The center line sits behind via the
+   parent's ::before, so spacing the sections just spaces the ticks. */
+.vt-month {
+  display: flex;
+  flex-direction: column;
+  min-height: 150px;
 }
 
 /* ── Month tick ────────────────────────────────────────────────────── */
