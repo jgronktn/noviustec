@@ -605,6 +605,105 @@ export default async function apiRoutes(fastify, opts) {
   });
 
   // ─────────────────────────────────────────────────────────────────────────
+  // POST /api/awaiting/:id/pay — record a manual payment against an
+  // outstanding invoice when there's no receipt to parse (check from your
+  // bank, credit-card charge with no vendor receipt, etc). Books a GL row
+  // using the AwaitingPayment row's vendor/amount + the user-supplied
+  // payment date/source/category, marks the awaiting row paid, and
+  // re-attaches any archived invoice docs to the new transaction.
+  // ─────────────────────────────────────────────────────────────────────────
+  fastify.post(
+    "/api/awaiting/:id/pay",
+    {
+      schema: {
+        body: {
+          type: "object",
+          required: ["date", "category", "payment_source"],
+          additionalProperties: false,
+          properties: {
+            date: { type: "string" }, // YYYY-MM-DD, payment date
+            category: { type: "string", minLength: 1 },
+            payment_source: { type: "string", minLength: 1 },
+            reference_number: { type: ["string", "null"], default: null },
+            reference_kind: {
+              type: ["string", "null"],
+              enum: [
+                "invoice",
+                "receipt",
+                "order",
+                "transaction",
+                "confirmation",
+                "other",
+                null,
+              ],
+              default: "confirmation",
+            },
+            description: { type: "string", default: "" },
+            notes: { type: "string", default: "" },
+          },
+        },
+      },
+    },
+    async (req, reply) => {
+      const awaiting = await getAwaiting(req.params.id);
+      if (!awaiting) {
+        return reply.code(404).send({ error: "AwaitingPayment row not found" });
+      }
+      if (awaiting.status !== "awaiting") {
+        return reply
+          .code(409)
+          .send({ error: `Cannot pay an AwaitingPayment with status=${awaiting.status}` });
+      }
+
+      const { id: transactionId } = await addTransaction({
+        vendor: awaiting.vendor,
+        date: req.body.date,
+        amount: awaiting.amount,
+        currency: awaiting.currency ?? "USD",
+        category: req.body.category,
+        payment_source: req.body.payment_source,
+        reference_number: req.body.reference_number ?? null,
+        reference_kind: req.body.reference_kind ?? "confirmation",
+        document_path: awaiting.document_path ?? null,
+        description: req.body.description ?? "",
+        notes: req.body.notes ?? "",
+        source_file: null,
+        pending_id: null,
+        created_by: "user",
+      });
+
+      // Carry the invoice's Documents rows forward to the new txn so the
+      // GL→Documents link is intact. (No new docs to add — there's no
+      // source receipt for this payment.)
+      await attachDocumentsToTransaction({
+        awaiting_id: req.params.id,
+        txn_id: transactionId,
+      });
+
+      await markAwaitingPaid(req.params.id, { paid_txn_id: transactionId });
+
+      req.log.info(
+        {
+          awaiting_id: req.params.id,
+          transaction_id: transactionId,
+          action: "manual_pay",
+          vendor: awaiting.vendor,
+          amount: awaiting.amount,
+          payment_source: req.body.payment_source,
+          reference_number: req.body.reference_number ?? null,
+        },
+        "manual payment recorded",
+      );
+
+      return {
+        awaiting_id: req.params.id,
+        transaction_id: transactionId,
+        action: "manual_pay",
+      };
+    },
+  );
+
+  // ─────────────────────────────────────────────────────────────────────────
   // GET /api/documents/pending/:id — preview the document attached to a
   // pending entry BEFORE approval. Reads the base64 attachment out of the
   // saved inbound/upload payload and streams it. For inline-HTML rows (no

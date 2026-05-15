@@ -63,6 +63,20 @@ export const listAwaiting = (token, status = "awaiting") =>
 export const fetchMainTimeline = (token) =>
   request(token, "GET", "/api/main-timeline");
 
+/**
+ * Record a manual payment against an outstanding AwaitingPayment row.
+ * No receipt document required — for checks, credit-card charges with
+ * no vendor receipt, etc. Books a GL row using the awaiting row's
+ * vendor + amount.
+ */
+export const recordPayment = (token, awaitingId, body) =>
+  request(
+    token,
+    "POST",
+    `/api/awaiting/${encodeURIComponent(awaitingId)}/pay`,
+    body,
+  );
+
 /** Quick health check, no auth. */
 export async function healthCheck() {
   const res = await fetch(`${BASE_URL}/health`);
