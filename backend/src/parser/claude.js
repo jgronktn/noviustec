@@ -20,9 +20,9 @@ function getClient() {
   return _client;
 }
 
-export async function callVision({ payload, contentBlocks, categories, paymentSources }) {
+export async function callVision({ payload, contentBlocks, categories, paymentSources, knownVendors }) {
   const client = getClient();
-  const systemBlocks = buildSystemBlocks({ categories, paymentSources });
+  const systemBlocks = buildSystemBlocks({ categories, paymentSources, knownVendors });
   const userContent = buildUserContent({ payload, contentBlocks });
 
   const response = await client.messages.create({

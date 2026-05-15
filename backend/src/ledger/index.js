@@ -17,6 +17,7 @@ export {
   listDocuments,
   getDocument,
   attachDocumentsToTransaction,
+  getKnownVendors,
 } from "./documents.js";
 export {
   addAwaitingPayment,

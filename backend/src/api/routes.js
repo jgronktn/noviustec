@@ -18,6 +18,7 @@ import {
   addTransaction,
   getLedgerPath,
   getDocument,
+  getKnownVendors,
 } from "../ledger/index.js";
 import { parseReceipt } from "../parser/index.js";
 import {
@@ -823,11 +824,16 @@ export default async function apiRoutes(fastify, opts) {
 
     let result;
     try {
-      const [categories, paymentSources] = await Promise.all([
+      const [categories, paymentSources, knownVendors] = await Promise.all([
         getCategories().catch(() => []),
         getPaymentSources().catch(() => []),
+        getKnownVendors().catch(() => []),
       ]);
-      result = await parseReceipt(payload, { categories, paymentSources });
+      result = await parseReceipt(payload, {
+        categories,
+        paymentSources,
+        knownVendors,
+      });
     } catch (err) {
       return reply.code(500).send({ error: `Parser failed: ${err.message}` });
     }

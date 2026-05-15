@@ -22,7 +22,7 @@ import { buildInlineHtmlBlock } from "./inline-html.js";
 import { callVision } from "./claude.js";
 
 export async function parseReceipt(payload, options = {}) {
-  const { categories = [], paymentSources = [] } = options;
+  const { categories = [], paymentSources = [], knownVendors = [] } = options;
   const triageResult = triage(payload);
 
   if (triageResult.kind === "no_content") {
@@ -74,6 +74,7 @@ export async function parseReceipt(payload, options = {}) {
       contentBlocks: [block],
       categories,
       paymentSources,
+      knownVendors,
     });
   }
 
@@ -97,6 +98,7 @@ export async function parseReceipt(payload, options = {}) {
     contentBlocks: blocks,
     categories,
     paymentSources,
+    knownVendors,
     extra: {
       ...(oversize.length > 0 ? { oversize } : {}),
       ...(compressed.length > 0 ? { compressed } : {}),
@@ -104,12 +106,13 @@ export async function parseReceipt(payload, options = {}) {
   });
 }
 
-async function callAndMap({ payload, triageResult, contentBlocks, categories, paymentSources, extra = {} }) {
+async function callAndMap({ payload, triageResult, contentBlocks, categories, paymentSources, knownVendors, extra = {} }) {
   const { proposal, usage, stop_reason } = await callVision({
     payload,
     contentBlocks,
     categories,
     paymentSources,
+    knownVendors,
   });
 
   const mapped = mapModelStatus(proposal.status, proposal.confidence);

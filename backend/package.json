@@ -8,7 +8,8 @@
     "dev": "node --watch server.js",
     "parse-fixtures": "node scripts/parse-fixtures.js",
     "init-ledger": "node scripts/init-ledger.js",
-    "inspect-ledger": "node scripts/inspect-ledger.js"
+    "inspect-ledger": "node scripts/inspect-ledger.js",
+    "merge-vendor": "node scripts/merge-vendor.js"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.96.0",

@@ -229,7 +229,7 @@ function buildFilename({ date, reference, vendorSlug, pendingId, idx, ext }) {
   return `${datePart}_${vendorSlug}-${suffix}${idxPart}.${ext}`;
 }
 
-function slugify(s) {
+export function slugify(s) {
   if (!s) return "";
   return s
     .toLowerCase()

@@ -17,7 +17,12 @@ import { promises as fs } from "node:fs";
 import * as path from "node:path";
 
 import { parseReceipt } from "./parser/index.js";
-import { getCategories, getPaymentSources, addPending } from "./ledger/index.js";
+import {
+  getCategories,
+  getPaymentSources,
+  getKnownVendors,
+  addPending,
+} from "./ledger/index.js";
 
 const SUPPORTED_UPLOAD_TYPES = new Set([
   "application/pdf",
@@ -41,12 +46,17 @@ export async function processReceiptPayload({ payload, logger, logDir, sourceFil
   const parsedPath = path.join(logDir, parsedFilename);
 
   try {
-    const [categories, paymentSources] = await Promise.all([
+    const [categories, paymentSources, knownVendors] = await Promise.all([
       getCategories().catch(() => []),
       getPaymentSources().catch(() => []),
+      getKnownVendors().catch(() => []),
     ]);
 
-    const result = await parseReceipt(payload, { categories, paymentSources });
+    const result = await parseReceipt(payload, {
+      categories,
+      paymentSources,
+      knownVendors,
+    });
     await fs.writeFile(parsedPath, JSON.stringify(result, null, 2));
 
     let pendingId = null;

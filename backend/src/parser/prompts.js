@@ -14,7 +14,7 @@ const SYSTEM_PROMPT_BASE = `You are a receipt parser for a bookkeeping system. Y
 Output rules:
 - "status": "parsed" if you extracted clear receipt data; "not_a_receipt" if the document is clearly something else (legal filing, personal photo, marketing flyer, plain message, calendar invite, contract, video, etc.); "ambiguous" if the document looks like a receipt but key fields are unreadable or missing.
 - "confidence": 0.0-1.0 self-assessed. Use < 0.5 when guessing significantly. For "not_a_receipt", confidence should be high if you are sure.
-- "vendor.name": cleaned merchant name (e.g., "Starbucks", not "STARBUCKS STORE #04421 SEATTLE WA"). Null for non-receipts.
+- "vendor.name": cleaned merchant name (e.g., "Starbucks", not "STARBUCKS STORE #04421 SEATTLE WA"). Null for non-receipts. If a "Known vendors" list is provided below and the merchant on this document is clearly one of them, use the EXACT spelling from that list — do not introduce a variant. Only invent a new vendor name when no listed vendor matches.
 - "vendor.raw_text": verbatim text near the merchant name, helpful for disambiguation.
 - "date": transaction date in ISO YYYY-MM-DD format. Null if not visible.
 - "total": the FINAL amount charged to the card or bank account, including any tax AND any tip (handwritten or printed). On a credit-card receipt where the printed "Total" line shows the pre-tip amount and a tip is written below it, you MUST add the tip into "total" yourself — the bookkeeping system needs to match the actual charge that hits the bank statement, not just the printed total. Use major units (12.34 for $12.34). Currency in ISO 4217 (USD, EUR, GBP, etc.).
@@ -30,8 +30,8 @@ Cloud-link documents, password-protected PDFs, or PDFs you cannot read: classify
 
 Below is the user's category and payment-source taxonomy. Use the provided values verbatim when suggesting — do not invent new ones.`;
 
-export function buildSystemBlocks({ categories, paymentSources }) {
-  const taxonomy = formatTaxonomy(categories, paymentSources);
+export function buildSystemBlocks({ categories, paymentSources, knownVendors = [] }) {
+  const taxonomy = formatTaxonomy(categories, paymentSources, knownVendors);
   return [
     { type: "text", text: SYSTEM_PROMPT_BASE },
     {
@@ -42,7 +42,7 @@ export function buildSystemBlocks({ categories, paymentSources }) {
   ];
 }
 
-function formatTaxonomy(categories, paymentSources) {
+function formatTaxonomy(categories, paymentSources, knownVendors) {
   const catLines = categories
     .map((c) => `- ${c.name}${c.description ? `: ${c.description}` : ""}`)
     .join("\n");
@@ -53,7 +53,12 @@ function formatTaxonomy(categories, paymentSources) {
       return `- ${s.name}${last4}${desc}`;
     })
     .join("\n");
-  return `## Categories\n${catLines || "(none provided)"}\n\n## Payment sources\n${srcLines || "(none provided)"}`;
+  const vendorLines = knownVendors.map((v) => `- ${v}`).join("\n");
+  return (
+    `## Categories\n${catLines || "(none provided)"}\n\n` +
+    `## Payment sources\n${srcLines || "(none provided)"}\n\n` +
+    `## Known vendors\n${vendorLines || "(none yet — first time seeing a vendor)"}`
+  );
 }
 
 export function buildUserContent({ payload, contentBlocks }) {

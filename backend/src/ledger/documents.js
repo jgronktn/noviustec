@@ -90,3 +90,26 @@ export async function getDocument(id) {
   const all = await listDocuments();
   return all.find((r) => r.id === id) ?? null;
 }
+
+/**
+ * Distinct vendor names seen across the books (Documents + AwaitingPayment
+ * + GL). Used as context for the receipt parser so new variants of an
+ * existing vendor name don't drift in ("Anthropic" vs "Anthropic, PBC").
+ */
+export async function getKnownVendors() {
+  return withWorkbookRead(async (wb) => {
+    const seen = new Set();
+    const sheets = ["Documents", "AwaitingPayment", "GL"];
+    for (const name of sheets) {
+      const sheet = wb.getWorksheet(name);
+      if (!sheet) continue;
+      for (const r of readRows(sheet)) {
+        if (r.vendor && typeof r.vendor === "string") {
+          seen.add(r.vendor.trim());
+        }
+      }
+    }
+    seen.delete("");
+    return [...seen].sort((a, b) => a.localeCompare(b));
+  });
+}
