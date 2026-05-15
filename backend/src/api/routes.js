@@ -11,6 +11,7 @@ import * as path from "node:path";
 import {
   getCategories,
   getPaymentSources,
+  ensurePaymentSource,
   listPending,
   getPending,
   updatePendingStatus,
@@ -655,13 +656,20 @@ export default async function apiRoutes(fastify, opts) {
           .send({ error: `Cannot pay an AwaitingPayment with status=${awaiting.status}` });
       }
 
+      // Register the payment source in the Sources sheet on first use so
+      // future Record-payment forms have it in the dropdown. ensurePaymentSource
+      // returns the canonical spelling if the user re-used an existing one
+      // (case-insensitive), keeping the GL consistent.
+      const { name: canonicalSource, added: sourceAdded } =
+        await ensurePaymentSource(req.body.payment_source);
+
       const { id: transactionId } = await addTransaction({
         vendor: awaiting.vendor,
         date: req.body.date,
         amount: awaiting.amount,
         currency: awaiting.currency ?? "USD",
         category: req.body.category,
-        payment_source: req.body.payment_source,
+        payment_source: canonicalSource || req.body.payment_source,
         reference_number: req.body.reference_number ?? null,
         reference_kind: req.body.reference_kind ?? "confirmation",
         document_path: awaiting.document_path ?? null,
@@ -689,7 +697,8 @@ export default async function apiRoutes(fastify, opts) {
           action: "manual_pay",
           vendor: awaiting.vendor,
           amount: awaiting.amount,
-          payment_source: req.body.payment_source,
+          payment_source: canonicalSource || req.body.payment_source,
+          payment_source_added: sourceAdded,
           reference_number: req.body.reference_number ?? null,
         },
         "manual payment recorded",

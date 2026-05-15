@@ -223,12 +223,25 @@ const unpaidTotal = computed(() =>
                     </label>
                     <label>
                       <span>Payment source</span>
-                      <select v-model="getForm(e.id, e).payment_source" required>
-                        <option value="" disabled>{{ loadingLookups ? "Loading…" : "Pick one" }}</option>
-                        <option v-for="s in paymentSources" :key="s.name" :value="s.name">
-                          {{ s.name }}<template v-if="s.last4"> · ••{{ s.last4 }}</template>
+                      <input
+                        type="text"
+                        list="payment-sources"
+                        v-model="getForm(e.id, e).payment_source"
+                        :placeholder="loadingLookups ? 'Loading…' : 'Card / bank / cash — type or pick'"
+                        required
+                      />
+                      <datalist id="payment-sources">
+                        <option
+                          v-for="s in paymentSources"
+                          :key="s.name"
+                          :value="s.name"
+                        >
+                          {{ s.last4 ? `${s.name} · ••${s.last4}` : s.name }}
                         </option>
-                      </select>
+                      </datalist>
+                      <span v-if="paymentSources.length === 0 && !loadingLookups" class="hint">
+                        No sources on file — typing one will save it for next time.
+                      </span>
                     </label>
                     <label class="ref-number">
                       <span>Reference number</span>
@@ -448,6 +461,16 @@ button.primary {
   border: 1px solid var(--border);
   border-radius: 4px;
   background: var(--surface);
+}
+
+.pay-form .hint {
+  font-size: 0.7rem;
+  color: var(--text-muted);
+  font-style: italic;
+  text-transform: none;
+  letter-spacing: 0;
+  font-weight: 400;
+  margin-top: 0.1rem;
 }
 
 .pay-form .notes {

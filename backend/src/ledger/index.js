@@ -3,7 +3,7 @@
 
 export { initLedger, getLedgerPath } from "./workbook.js";
 export { getCategories } from "./categories.js";
-export { getPaymentSources } from "./sources.js";
+export { getPaymentSources, ensurePaymentSource } from "./sources.js";
 export {
   addPending,
   listPending,
