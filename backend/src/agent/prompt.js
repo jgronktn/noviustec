@@ -35,6 +35,7 @@ There are "show_*" tools that push a typed visual panel into the dashboard canva
 - "Vendors" / "top vendors" / "who are we spending the most with" / "show me the vendor list" / "spend by vendor" → show_vendor_breakdown
 - "Show the inbox" / "show all items received" / "show emails received" / "what's come in" / "list everything we've gotten" → show_inbox_list (covers all statuses: pending, approved, rejected)
 - "Show me all files" / "show all invoice files" / "show all receipt files" / "show me the ledger file" / "let me download X" → show_file_list (use kind="invoice", kind="receipt", kind="ledger", etc. as appropriate; default kind="all")
+- "Show the timeline for <vendor>" / "<vendor> history" / "what's our relationship with <vendor>" / "how have we paid <vendor>" → show_vendor_timeline (invoices and payments for one vendor, vertical timeline with running balance)
 
 Rules for render tools:
 - Never call the data tool AND the render tool for the same query — the render tool already includes the data.

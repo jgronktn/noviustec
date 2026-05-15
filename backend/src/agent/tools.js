@@ -201,6 +201,34 @@ export const TOOL_DEFINITIONS = [
     },
   },
   {
+    name: "show_vendor_timeline",
+    description:
+      "Render a two-column vertical timeline for a single vendor — invoices on the left, payments on the right, sorted chronologically. Each event is a card anchored by its date, with subtle color coding (gray = paid, amber = awaiting, red = overdue). A running balance + outstanding-invoice list sits at the top. Use this when the user wants to see the financial relationship with one vendor over time: 'show my Anthropic timeline', 'history with Kroger', 'what's our DigitalOcean relationship look like'. Vendor match is case-insensitive substring.",
+    input_schema: {
+      type: "object",
+      required: ["vendor"],
+      properties: {
+        vendor: {
+          type: "string",
+          description:
+            "Vendor query. Matches stored vendor names by case-insensitive substring — 'anthropic' matches 'Anthropic, PBC'.",
+        },
+        from: {
+          type: "string",
+          description: "Optional inclusive start date (YYYY-MM-DD).",
+        },
+        to: {
+          type: "string",
+          description: "Optional inclusive end date (YYYY-MM-DD).",
+        },
+        title: {
+          type: "string",
+          description: "Optional title.",
+        },
+      },
+    },
+  },
+  {
     name: "show_file_list",
     description:
       "Render a downloadable list of archived files in the dashboard (PDFs and images attached to receipts, invoices, etc., plus the ledger workbook itself). The panel lets the user download individual files or select multiple and download them in bulk. Filter by reference_kind (invoice, receipt, order, transaction, confirmation, other), or use kind='ledger' to surface just the ledger workbook, or omit kind to include everything.",
