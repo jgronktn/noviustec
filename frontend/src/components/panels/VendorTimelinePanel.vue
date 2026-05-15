@@ -119,6 +119,23 @@ const monthGroups = computed(() => {
     </div>
 
     <div v-else class="vt-timeline">
+      <!-- Per-side running totals, pinned above the top month tag. -->
+      <div class="vt-totals">
+        <div class="vt-side vt-left">
+          <div class="vt-total vt-total-left">
+            <span class="vt-total-label">Invoices &amp; Receipts</span>
+            <span class="vt-total-amount">{{ fmt(data.summary.total_left) }}</span>
+          </div>
+        </div>
+        <div class="vt-axis vt-axis-spacer" />
+        <div class="vt-side vt-right">
+          <div class="vt-total vt-total-right">
+            <span class="vt-total-label">Payments</span>
+            <span class="vt-total-amount">{{ fmt(data.summary.total_right) }}</span>
+          </div>
+        </div>
+      </div>
+
       <section
         v-for="group in monthGroups"
         :key="group.key"
@@ -257,6 +274,65 @@ const monthGroups = computed(() => {
   background: var(--border);
   transform: translateX(-50%);
   z-index: 0;
+}
+
+/* ── Totals strip (pinned above the first month section) ──────────────
+   Two side-aligned cards reporting the literal sum of every card on
+   each side of the line. */
+.vt-totals {
+  display: grid;
+  grid-template-columns: 1fr 110px 1fr;
+  align-items: stretch;
+  padding-bottom: 0.85rem;
+  margin-bottom: 0.35rem;
+  border-bottom: 1px dashed var(--border);
+}
+
+.vt-axis-spacer {
+  /* center column is intentionally empty; the line still draws through */
+}
+
+.vt-total {
+  display: inline-flex;
+  flex-direction: column;
+  gap: 0.1rem;
+  padding: 0.5rem 0.85rem;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+
+.vt-total-left {
+  /* match the left-column right-alignment of left-side cards */
+  align-self: flex-end;
+}
+
+.vt-total-right {
+  align-self: flex-start;
+}
+
+.vt-total-label {
+  font-size: 0.65rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  font-weight: 700;
+  color: var(--text-muted);
+}
+
+.vt-total-amount {
+  font-family: var(--font-mono);
+  font-size: 1.25rem;
+  font-weight: 600;
+  color: var(--text);
+}
+
+@media (max-width: 720px) {
+  .vt-totals {
+    grid-template-columns: 1fr 80px 1fr;
+  }
+  .vt-total-amount {
+    font-size: 1rem;
+  }
 }
 
 /* ── Month section ────────────────────────────────────────────────────

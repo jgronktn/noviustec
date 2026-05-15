@@ -265,6 +265,11 @@ export async function buildTimelineProps({ vendor = null, from, to } = {}) {
     .filter((e) => e.source === "awaiting")
     .reduce((s, e) => s + e.amount, 0);
   const totalPaid = rightEvents.reduce((s, e) => s + e.amount, 0);
+  // total_left / total_right mirror exactly what the panel renders on
+  // each side (every visible card), so the per-side totals shown above
+  // the top month tick are the literal sum of the cards beneath them.
+  const totalLeft = leftEvents.reduce((s, e) => s + e.amount, 0);
+  const totalRight = totalPaid;
   const outstandingInvoices = leftEvents
     .filter(
       (e) =>
@@ -303,6 +308,8 @@ export async function buildTimelineProps({ vendor = null, from, to } = {}) {
     summary: {
       total_invoiced: Math.round(totalInvoiced * 100) / 100,
       total_paid: Math.round(totalPaid * 100) / 100,
+      total_left: Math.round(totalLeft * 100) / 100,
+      total_right: Math.round(totalRight * 100) / 100,
       outstanding_balance: Math.round(outstandingBalance * 100) / 100,
       invoice_count: leftEvents.filter((e) => e.source === "awaiting").length,
       payment_count: rightEvents.length,
