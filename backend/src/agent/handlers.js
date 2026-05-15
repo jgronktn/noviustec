@@ -144,6 +144,178 @@ function daysBetween(a, b) {
 
 const TXN_TABLE_LIMIT = 100;
 
+const TIMELINE_OVERDUE_DAYS = 30;
+
+/**
+ * Build the timeline panel payload. Used by:
+ *  - show_vendor_timeline (agent tool, vendor required)
+ *  - show_main_timeline   (agent tool, vendor null — all vendors)
+ *  - GET /api/main-timeline (direct HTTP route for the dashboard home screen)
+ *
+ * When `vendor` is null/empty, every vendor's events appear and the panel
+ * renders in "global mode" (vendor name shown on each card).
+ */
+export async function buildTimelineProps({ vendor = null, from, to } = {}) {
+  const today = new Date().toISOString().slice(0, 10);
+
+  const awaitingAll = await listAwaiting({ status: "all" });
+  const txnAll = await listTransactions({ from, to });
+
+  const matchedAwaiting = vendor
+    ? awaitingAll.filter((r) => vendorMatches(r.vendor, vendor))
+    : awaitingAll;
+  const matchedTxns = vendor
+    ? txnAll.filter((r) => vendorMatches(r.vendor, vendor))
+    : txnAll;
+
+  const inRange = (d) => {
+    const iso = isoDate(d);
+    if (!iso) return false;
+    if (from && iso < from) return false;
+    if (to && iso > to) return false;
+    return true;
+  };
+
+  // Left-side events (document side: invoices and receipts).
+  const leftEvents = [];
+
+  for (const r of matchedAwaiting) {
+    if (!inRange(r.date)) continue;
+    const date = isoDate(r.date);
+    const isPaid = r.status === "paid";
+    const daysOut =
+      !isPaid && date ? Math.max(0, daysBetween(date, today)) : null;
+    let status = r.status;
+    if (
+      status === "awaiting" &&
+      daysOut != null &&
+      daysOut > TIMELINE_OVERDUE_DAYS
+    ) {
+      status = "overdue";
+    }
+    leftEvents.push({
+      id: r.id,
+      kind: r.reference_kind || "invoice",
+      date,
+      amount: Math.round(Number(r.amount) * 100) / 100,
+      currency: r.currency ?? "USD",
+      reference_number: r.reference_number ?? null,
+      status,
+      days_outstanding: daysOut,
+      paid_at: r.paid_at
+        ? typeof r.paid_at === "string"
+          ? r.paid_at.slice(0, 10)
+          : new Date(r.paid_at).toISOString().slice(0, 10)
+        : null,
+      paid_txn_id: r.paid_txn_id ?? null,
+      description: r.description ?? "",
+      vendor: r.vendor,
+      source: "awaiting",
+    });
+  }
+
+  for (const r of matchedTxns) {
+    const k = r.reference_kind;
+    if (k !== "invoice" && k !== "receipt") continue;
+    const date = isoDate(r.date);
+    leftEvents.push({
+      id: `${r.id}-doc`,
+      kind: k,
+      date,
+      amount: Math.round(Number(r.amount) * 100) / 100,
+      currency: r.currency ?? "USD",
+      reference_number: r.reference_number ?? null,
+      status: "paid",
+      days_outstanding: null,
+      paid_at: date,
+      paid_txn_id: r.id,
+      description: r.description ?? "",
+      vendor: r.vendor,
+      source: "gl",
+    });
+  }
+
+  const rightEvents = matchedTxns.map((r) => ({
+    id: r.id,
+    kind: "payment",
+    date: isoDate(r.date),
+    amount: Math.round(Number(r.amount) * 100) / 100,
+    currency: r.currency ?? "USD",
+    reference_number: r.reference_number ?? null,
+    reference_kind: r.reference_kind ?? null,
+    description: r.description ?? "",
+    category: r.category ?? null,
+    payment_source: r.payment_source ?? null,
+    vendor: r.vendor,
+  }));
+
+  const dateSet = new Set([
+    ...leftEvents.map((e) => e.date).filter(Boolean),
+    ...rightEvents.map((e) => e.date).filter(Boolean),
+  ]);
+  const rows = [...dateSet]
+    .sort((a, b) => b.localeCompare(a))
+    .map((d) => ({
+      date: d,
+      left: leftEvents.filter((e) => e.date === d),
+      right: rightEvents.filter((e) => e.date === d),
+    }));
+
+  const totalInvoiced = leftEvents
+    .filter((e) => e.source === "awaiting")
+    .reduce((s, e) => s + e.amount, 0);
+  const totalPaid = rightEvents.reduce((s, e) => s + e.amount, 0);
+  const outstandingInvoices = leftEvents
+    .filter(
+      (e) =>
+        e.source === "awaiting" &&
+        (e.status === "awaiting" || e.status === "overdue"),
+    )
+    .map((e) => ({
+      id: e.id,
+      vendor: e.vendor,
+      reference_number: e.reference_number,
+      date: e.date,
+      amount: e.amount,
+      days_outstanding: e.days_outstanding,
+      overdue: e.status === "overdue",
+    }));
+  const outstandingBalance = outstandingInvoices.reduce(
+    (s, i) => s + i.amount,
+    0,
+  );
+
+  const vendorCounts = new Map();
+  for (const e of [...leftEvents, ...rightEvents]) {
+    vendorCounts.set(e.vendor, (vendorCounts.get(e.vendor) ?? 0) + 1);
+  }
+  const distinctVendors = vendorCounts.size;
+  const canonicalVendor = vendor
+    ? [...vendorCounts.entries()].sort((a, b) => b[1] - a[1])[0]?.[0] ?? vendor
+    : null;
+
+  return {
+    vendor: canonicalVendor,
+    query: vendor || null,
+    is_global: !vendor,
+    period: { from: from ?? null, to: to ?? null },
+    rows,
+    summary: {
+      total_invoiced: Math.round(totalInvoiced * 100) / 100,
+      total_paid: Math.round(totalPaid * 100) / 100,
+      outstanding_balance: Math.round(outstandingBalance * 100) / 100,
+      invoice_count: leftEvents.filter((e) => e.source === "awaiting").length,
+      payment_count: rightEvents.length,
+      awaiting_count: leftEvents.filter((e) => e.status === "awaiting").length,
+      overdue_count: leftEvents.filter((e) => e.status === "overdue").length,
+      distinct_vendors: distinctVendors,
+      outstanding_invoices: outstandingInvoices,
+      overdue_days_threshold: TIMELINE_OVERDUE_DAYS,
+      as_of: today,
+    },
+  };
+}
+
 export async function runTool(name, input) {
   const args = input ?? {};
   switch (name) {
@@ -290,182 +462,34 @@ export async function runTool(name, input) {
       if (!args.vendor) {
         throw new Error("show_vendor_timeline requires 'vendor'");
       }
-      const today = new Date().toISOString().slice(0, 10);
-      const OVERDUE_DAYS = 30;
-
-      const awaitingAll = await listAwaiting({ status: "all" });
-      const txnAll = await listTransactions({ from: args.from, to: args.to });
-
-      const matchedAwaiting = awaitingAll.filter((r) =>
-        vendorMatches(r.vendor, args.vendor),
-      );
-      const matchedTxns = txnAll.filter((r) =>
-        vendorMatches(r.vendor, args.vendor),
-      );
-
-      const inRange = (d) => {
-        const iso = isoDate(d);
-        if (!iso) return false;
-        if (args.from && iso < args.from) return false;
-        if (args.to && iso > args.to) return false;
-        return true;
-      };
-
-      // ── Left-side events (document side: invoices and receipts) ───────
-      const leftEvents = [];
-
-      // 1) Every AwaitingPayment row contributes a left card. Its kind is
-      //    usually "invoice" but could be any reference_kind the parser
-      //    extracted.
-      for (const r of matchedAwaiting) {
-        if (!inRange(r.date)) continue;
-        const date = isoDate(r.date);
-        const isPaid = r.status === "paid";
-        const daysOut =
-          !isPaid && date ? Math.max(0, daysBetween(date, today)) : null;
-        let status = r.status;
-        if (
-          status === "awaiting" &&
-          daysOut != null &&
-          daysOut > OVERDUE_DAYS
-        ) {
-          status = "overdue";
-        }
-        leftEvents.push({
-          id: r.id,
-          kind: r.reference_kind || "invoice",
-          date,
-          amount: Math.round(Number(r.amount) * 100) / 100,
-          currency: r.currency ?? "USD",
-          reference_number: r.reference_number ?? null,
-          status, // awaiting | overdue | paid | written_off | rejected
-          days_outstanding: daysOut,
-          paid_at: r.paid_at
-            ? typeof r.paid_at === "string"
-              ? r.paid_at.slice(0, 10)
-              : new Date(r.paid_at).toISOString().slice(0, 10)
-            : null,
-          paid_txn_id: r.paid_txn_id ?? null,
-          description: r.description ?? "",
-          vendor: r.vendor,
-          source: "awaiting",
-        });
-      }
-
-      // 2) Every GL row whose source doc is itself an invoice or receipt
-      //    also contributes a left card at the GL date — that's the doc
-      //    that arrived alongside the payment.
-      for (const r of matchedTxns) {
-        const k = r.reference_kind;
-        if (k !== "invoice" && k !== "receipt") continue;
-        const date = isoDate(r.date);
-        leftEvents.push({
-          id: `${r.id}-doc`,
-          kind: k,
-          date,
-          amount: Math.round(Number(r.amount) * 100) / 100,
-          currency: r.currency ?? "USD",
-          reference_number: r.reference_number ?? null,
-          status: "paid", // by construction — this doc was approved into GL
-          days_outstanding: null,
-          paid_at: date,
-          paid_txn_id: r.id,
-          description: r.description ?? "",
-          vendor: r.vendor,
-          source: "gl",
-        });
-      }
-
-      // ── Right-side events (money side: every GL row is a payment) ─────
-      const rightEvents = matchedTxns.map((r) => ({
-        id: r.id,
-        kind: "payment",
-        date: isoDate(r.date),
-        amount: Math.round(Number(r.amount) * 100) / 100,
-        currency: r.currency ?? "USD",
-        reference_number: r.reference_number ?? null,
-        reference_kind: r.reference_kind ?? null,
-        description: r.description ?? "",
-        category: r.category ?? null,
-        payment_source: r.payment_source ?? null,
-        vendor: r.vendor,
-      }));
-
-      // ── Group into per-date rows, newest-first ────────────────────────
-      const dateSet = new Set([
-        ...leftEvents.map((e) => e.date).filter(Boolean),
-        ...rightEvents.map((e) => e.date).filter(Boolean),
-      ]);
-      const rows = [...dateSet]
-        .sort((a, b) => b.localeCompare(a)) // descending — newest first
-        .map((d) => ({
-          date: d,
-          left: leftEvents.filter((e) => e.date === d),
-          right: rightEvents.filter((e) => e.date === d),
-        }));
-
-      // Summary kept in the payload so the agent can narrate it even
-      // though the panel no longer renders summary tiles.
-      const totalInvoiced = leftEvents
-        .filter((e) => e.source === "awaiting")
-        .reduce((s, e) => s + e.amount, 0);
-      const totalPaid = rightEvents.reduce((s, e) => s + e.amount, 0);
-      const outstandingInvoices = leftEvents
-        .filter(
-          (e) =>
-            e.source === "awaiting" &&
-            (e.status === "awaiting" || e.status === "overdue"),
-        )
-        .map((e) => ({
-          id: e.id,
-          reference_number: e.reference_number,
-          date: e.date,
-          amount: e.amount,
-          days_outstanding: e.days_outstanding,
-          overdue: e.status === "overdue",
-        }));
-      const outstandingBalance = outstandingInvoices.reduce(
-        (s, i) => s + i.amount,
-        0,
-      );
-
-      // Canonical vendor name from whichever spelling has the most events.
-      const vendorCounts = new Map();
-      for (const e of [...leftEvents, ...rightEvents]) {
-        vendorCounts.set(e.vendor, (vendorCounts.get(e.vendor) ?? 0) + 1);
-      }
-      const canonicalVendor =
-        [...vendorCounts.entries()].sort((a, b) => b[1] - a[1])[0]?.[0] ??
-        args.vendor;
-
-      const props = {
-        vendor: canonicalVendor,
-        query: args.vendor,
-        period: { from: args.from ?? null, to: args.to ?? null },
-        rows,
-        summary: {
-          total_invoiced: Math.round(totalInvoiced * 100) / 100,
-          total_paid: Math.round(totalPaid * 100) / 100,
-          outstanding_balance: Math.round(outstandingBalance * 100) / 100,
-          invoice_count: leftEvents.filter((e) => e.source === "awaiting")
-            .length,
-          payment_count: rightEvents.length,
-          awaiting_count: leftEvents.filter((e) => e.status === "awaiting")
-            .length,
-          overdue_count: leftEvents.filter((e) => e.status === "overdue")
-            .length,
-          outstanding_invoices: outstandingInvoices,
-          overdue_days_threshold: OVERDUE_DAYS,
-          as_of: today,
-        },
-      };
-
-      const title = args.title ?? `Timeline · ${canonicalVendor}`;
+      const props = await buildTimelineProps({
+        vendor: args.vendor,
+        from: args.from,
+        to: args.to,
+      });
+      const title = args.title ?? `Timeline · ${props.vendor}`;
       return {
         __panel: { kind: "vendor_timeline", title, props },
-        vendor: canonicalVendor,
+        vendor: props.vendor,
         invoice_count: props.summary.invoice_count,
         payment_count: props.summary.payment_count,
+        outstanding_balance: props.summary.outstanding_balance,
+        overdue_count: props.summary.overdue_count,
+      };
+    }
+
+    case "show_main_timeline": {
+      const props = await buildTimelineProps({
+        vendor: null,
+        from: args.from,
+        to: args.to,
+      });
+      const title = args.title ?? "All activity";
+      return {
+        __panel: { kind: "vendor_timeline", title, props },
+        invoice_count: props.summary.invoice_count,
+        payment_count: props.summary.payment_count,
+        distinct_vendors: props.summary.distinct_vendors,
         outstanding_balance: props.summary.outstanding_balance,
         overdue_count: props.summary.overdue_count,
       };

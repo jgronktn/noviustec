@@ -38,6 +38,7 @@ import {
   findMatchCandidates,
 } from "../ledger/index.js";
 import { runAgent } from "../agent/loop.js";
+import { buildTimelineProps } from "../agent/handlers.js";
 
 // Hardcoded for single-tenant v1. Eventually derived from authenticated session.
 const COMPANY_ID = process.env.NOVIUSTEC_COMPANY_ID || "default";
@@ -907,6 +908,39 @@ export default async function apiRoutes(fastify, opts) {
 
       req.log.info({ pending_id: row.id, reason: req.body.reason }, "pending rejected");
       return { pending_id: row.id, status: "rejected" };
+    },
+  );
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // GET /api/main-timeline — the global, all-vendor timeline used as the
+  // dashboard's home screen on login. Returns the same payload shape that
+  // the agent tool show_main_timeline emits, so the frontend can render
+  // it via the existing VendorTimelinePanel.vue component.
+  // ─────────────────────────────────────────────────────────────────────────
+  fastify.get(
+    "/api/main-timeline",
+    {
+      schema: {
+        querystring: {
+          type: "object",
+          properties: {
+            from: { type: "string" },
+            to: { type: "string" },
+          },
+        },
+      },
+    },
+    async (req) => {
+      const props = await buildTimelineProps({
+        vendor: null,
+        from: req.query.from,
+        to: req.query.to,
+      });
+      return {
+        kind: "vendor_timeline",
+        title: "All activity",
+        props,
+      };
     },
   );
 

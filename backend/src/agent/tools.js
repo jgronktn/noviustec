@@ -201,6 +201,28 @@ export const TOOL_DEFINITIONS = [
     },
   },
   {
+    name: "show_main_timeline",
+    description:
+      "Render the global activity timeline — every invoice, receipt and payment across every vendor — in the same two-column timeline format as show_vendor_timeline. Use when the user wants the unfiltered, all-vendor view (the default dashboard home screen). Each card shows the vendor name since the view is multi-vendor.",
+    input_schema: {
+      type: "object",
+      properties: {
+        from: {
+          type: "string",
+          description: "Optional inclusive start date (YYYY-MM-DD).",
+        },
+        to: {
+          type: "string",
+          description: "Optional inclusive end date (YYYY-MM-DD).",
+        },
+        title: {
+          type: "string",
+          description: "Optional title.",
+        },
+      },
+    },
+  },
+  {
     name: "show_vendor_timeline",
     description:
       "Render a two-column vertical timeline for a single vendor — invoices on the left, payments on the right, sorted chronologically. Each event is a card anchored by its date, with subtle color coding (gray = paid, amber = awaiting, red = overdue). A running balance + outstanding-invoice list sits at the top. Use this when the user wants to see the financial relationship with one vendor over time: 'show my Anthropic timeline', 'history with Kroger', 'what's our DigitalOcean relationship look like'. Vendor match is case-insensitive substring.",

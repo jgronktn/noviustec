@@ -55,6 +55,14 @@ export const getPaymentSources = (token) =>
 export const listAwaiting = (token, status = "awaiting") =>
   request(token, "GET", `/api/awaiting?status=${encodeURIComponent(status)}`);
 
+/**
+ * Fetch the global, all-vendor timeline payload. Used by App.vue to
+ * auto-load the dashboard home screen on login. Returns
+ * { kind, title, props } — the same shape the agent's panel events have.
+ */
+export const fetchMainTimeline = (token) =>
+  request(token, "GET", "/api/main-timeline");
+
 /** Quick health check, no auth. */
 export async function healthCheck() {
   const res = await fetch(`${BASE_URL}/health`);

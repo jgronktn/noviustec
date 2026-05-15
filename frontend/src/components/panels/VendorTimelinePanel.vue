@@ -92,11 +92,17 @@ const renderItems = computed(() => {
 
 <template>
   <div class="vt-root">
-    <!-- Header is intentionally tiny: just the vendor name. No summary
-         tiles — the timeline itself is the answer. -->
+    <!-- Header is intentionally tiny. Single-vendor mode shows the
+         canonical name; global mode shows 'All activity' plus a count.
+         No summary tiles — the timeline itself is the answer. -->
     <header class="vt-head">
-      <h3 class="vt-vendor">{{ data.vendor }}</h3>
-      <span v-if="data.query !== data.vendor" class="vt-match">
+      <h3 v-if="data.is_global" class="vt-vendor">All activity</h3>
+      <h3 v-else class="vt-vendor">{{ data.vendor }}</h3>
+      <span v-if="data.is_global" class="vt-match">
+        {{ data.summary.distinct_vendors }} vendor<span v-if="data.summary.distinct_vendors !== 1">s</span>
+        · {{ data.summary.invoice_count + data.summary.payment_count }} event<span v-if="data.summary.invoice_count + data.summary.payment_count !== 1">s</span>
+      </span>
+      <span v-else-if="data.query !== data.vendor" class="vt-match">
         matched “{{ data.query }}”
       </span>
     </header>
@@ -139,6 +145,7 @@ const renderItems = computed(() => {
               :title="ev.description || ''"
             >
               <span class="vt-card-kind">{{ kindLabel(ev.kind) }}</span>
+              <span v-if="data.is_global" class="vt-card-vendor">{{ ev.vendor }}</span>
               <span v-if="ev.reference_number" class="vt-card-ref">
                 {{ ev.reference_number }}
               </span>
@@ -166,6 +173,7 @@ const renderItems = computed(() => {
               :title="ev.description || ''"
             >
               <span class="vt-card-kind">{{ kindLabel(ev.kind) }}</span>
+              <span v-if="data.is_global" class="vt-card-vendor">{{ ev.vendor }}</span>
               <span v-if="ev.payment_source" class="vt-card-source">
                 {{ ev.payment_source }}
               </span>
@@ -428,6 +436,15 @@ const renderItems = computed(() => {
   font-weight: 700;
   color: var(--text-muted);
   flex-shrink: 0;
+}
+
+.vt-card-vendor {
+  font-weight: 600;
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+  max-width: 160px;
 }
 
 .vt-card-ref {

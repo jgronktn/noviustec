@@ -1,9 +1,10 @@
 <script setup>
-import { ref, provide } from "vue";
+import { ref, provide, onMounted, watch } from "vue";
 import TokenGate from "./components/TokenGate.vue";
 import InboxPanel from "./components/InboxPanel.vue";
 import PromptPanel from "./components/PromptPanel.vue";
 import DashboardPanel from "./components/DashboardPanel.vue";
+import { fetchMainTimeline } from "./api.js";
 
 // Injected by vite.config.js at build time. Hover the badge to see when
 // the bundle was built; the value is the short git SHA (with a "+" suffix
@@ -69,6 +70,47 @@ function dismissPanel(id) {
 function clearPanels() {
   agentPanels.value = [];
 }
+
+// ── Dashboard home screen ──────────────────────────────────────────────
+// On sign-in (token first appears), auto-load the global all-vendor
+// timeline and push it as the initial canvas panel. Once per session —
+// if the user dismisses it, we don't re-push.
+let mainTimelineLoaded = false;
+
+async function loadMainTimeline() {
+  if (!token.value || mainTimelineLoaded) return;
+  mainTimelineLoaded = true;
+  try {
+    const data = await fetchMainTimeline(token.value);
+    onAgentPanel({
+      id: "main-timeline",
+      kind: data.kind,
+      title: data.title,
+      props: data.props,
+      createdAt: Date.now(),
+    });
+  } catch (e) {
+    // 401 means stale token — the inbox panel will surface that too.
+    if (e.status === 401) {
+      localStorage.removeItem(STORAGE_KEY);
+      token.value = "";
+    }
+    // Otherwise: swallow. The user can still interact normally; they
+    // just don't get the auto-home screen this session.
+    mainTimelineLoaded = false;
+  }
+}
+
+onMounted(loadMainTimeline);
+watch(token, (next, prev) => {
+  if (!prev && next) {
+    mainTimelineLoaded = false;
+    loadMainTimeline();
+  }
+  if (!next) {
+    mainTimelineLoaded = false;
+  }
+});
 </script>
 
 <template>
