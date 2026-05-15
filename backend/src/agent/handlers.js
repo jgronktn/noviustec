@@ -265,10 +265,24 @@ export async function buildTimelineProps({ vendor = null, from, to } = {}) {
     .filter((e) => e.source === "awaiting")
     .reduce((s, e) => s + e.amount, 0);
   const totalPaid = rightEvents.reduce((s, e) => s + e.amount, 0);
-  // total_left / total_right mirror exactly what the panel renders on
-  // each side (every visible card), so the per-side totals shown above
-  // the top month tick are the literal sum of the cards beneath them.
-  const totalLeft = leftEvents.reduce((s, e) => s + e.amount, 0);
+  // For matched flows we render BOTH an Invoice card (from AwaitingPayment)
+  // and a Receipt card (from the GL row that paid it). They show distinct
+  // real events on different dates, but the money is one transaction —
+  // counting both would inflate the side total. So total_left skips a
+  // GL-sourced left card whenever its txn already shows up as the payment
+  // for an AwaitingPayment row.
+  const paidTxnIds = new Set(
+    matchedAwaiting
+      .filter((r) => r.paid_txn_id)
+      .map((r) => r.paid_txn_id),
+  );
+  const totalLeft = leftEvents.reduce((sum, e) => {
+    if (e.source === "gl") {
+      const baseId = e.id.replace(/-doc$/, "");
+      if (paidTxnIds.has(baseId)) return sum; // dedupe — invoice already counted
+    }
+    return sum + e.amount;
+  }, 0);
   const totalRight = totalPaid;
   const outstandingInvoices = leftEvents
     .filter(
