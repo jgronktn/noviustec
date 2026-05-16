@@ -223,9 +223,18 @@ export async function buildTimelineProps({ vendor = null, from, to } = {}) {
     });
   }
 
+  // Every GL row with a reference_kind contributes a left-side document
+  // card — not just invoice/receipt. A "confirmation" (bank Payment
+  // Details), a "transaction" (credit-card statement line, check #), an
+  // "order" or "other" each represents a source doc that justifies the
+  // payment. Without this, a payment whose source doc isn't an invoice
+  // (e.g. Schmeiser's confirmation) shows up on the right with no
+  // counterpart on the left, and totals look mysteriously off by that
+  // amount. Dedupe still excludes GL cards whose txn already shows up as
+  // the paid_txn for an AwaitingPayment row (no double-count).
   for (const r of matchedTxns) {
     const k = r.reference_kind;
-    if (k !== "invoice" && k !== "receipt") continue;
+    if (!k) continue; // no reference → no left card
     const date = isoDate(r.date);
     leftEvents.push({
       id: `${r.id}-doc`,
