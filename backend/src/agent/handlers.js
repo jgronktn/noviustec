@@ -12,6 +12,8 @@ import {
   getCategories,
   getPaymentSources,
   listDocuments,
+  listStatements,
+  listStatementLines,
   getLedgerPath,
 } from "../ledger/index.js";
 
@@ -639,6 +641,74 @@ export async function runTool(name, input) {
         },
         count: files.length,
         truncated: docTruncated,
+        counts,
+      };
+    }
+
+    case "show_statements_list": {
+      const status = args.status ?? "all";
+      let rows = await listStatements({ status });
+      if (args.source) rows = rows.filter((r) => r.source === args.source);
+
+      // Pull line counts in one pass so the panel can show them per row
+      // without N round trips to the lines sheet.
+      const allLines = await listStatementLines();
+      const linesByStatement = new Map();
+      for (const ln of allLines) {
+        const k = ln.statement_id;
+        linesByStatement.set(k, (linesByStatement.get(k) ?? 0) + 1);
+      }
+
+      const entries = rows
+        .map((r) => ({
+          id: r.id,
+          status: r.status,
+          source: r.source,
+          period_start: isoDate(r.period_start),
+          period_end: isoDate(r.period_end),
+          statement_date: isoDate(r.statement_date),
+          currency: r.currency ?? "USD",
+          opening_balance: r.opening_balance ?? null,
+          closing_balance: r.closing_balance ?? null,
+          total_charges: r.total_charges ?? null,
+          total_payments: r.total_payments ?? null,
+          line_count: linesByStatement.get(r.id) ?? 0,
+          document_path: r.document_path ?? null,
+          download_path: r.document_path
+            ? `/api/documents/statement/${encodeURIComponent(r.id)}`
+            : null,
+          original_filename: r.original_filename ?? null,
+          notes: r.notes ?? "",
+        }))
+        .sort((a, b) =>
+          (b.statement_date ?? "").localeCompare(a.statement_date ?? ""),
+        );
+
+      const counts = entries.reduce((acc, r) => {
+        acc[r.status] = (acc[r.status] ?? 0) + 1;
+        return acc;
+      }, {});
+
+      const filterParts = [];
+      if (status !== "all") filterParts.push(`status=${status}`);
+      if (args.source) filterParts.push(`source=${args.source}`);
+      const filterDesc = filterParts.join(" · ");
+      const title =
+        args.title ??
+        (filterDesc ? `Statements · ${filterDesc}` : "Statements");
+
+      return {
+        __panel: {
+          kind: "statements_list",
+          title,
+          props: {
+            status_filter: status,
+            count: entries.length,
+            counts,
+            entries,
+          },
+        },
+        count: entries.length,
         counts,
       };
     }

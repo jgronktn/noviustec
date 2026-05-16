@@ -296,6 +296,29 @@ export const TOOL_DEFINITIONS = [
     },
   },
   {
+    name: "show_statements_list",
+    description:
+      "Render a table of imported bank and credit-card statements (from the Statements sheet — NOT the document archive). Each row shows the statement's source account, period, line count, opening/closing balances, and totals, with a Download button to grab the original PDF. Use this when the user asks to see bank statements, credit-card statements, or 'statements I uploaded'. Filter by status or by source.",
+    input_schema: {
+      type: "object",
+      properties: {
+        status: {
+          type: "string",
+          enum: ["all", "imported", "needs_attention", "reconciled", "partially_reconciled"],
+          description: "Filter by status. Default: all.",
+        },
+        source: {
+          type: "string",
+          description: "Filter to a single payment source name (exact match).",
+        },
+        title: {
+          type: "string",
+          description: "Optional title.",
+        },
+      },
+    },
+  },
+  {
     name: "show_inbox_list",
     description:
       "Render a table of all items received in the inbox (receipts that arrived via email or upload). Shows pending, approved, and rejected entries together so the user can see the full history of what's come in. Default returns all statuses, newest first. Cap at 100 rows.",
