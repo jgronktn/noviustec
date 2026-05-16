@@ -11,7 +11,7 @@ Output rules:
 - "source.kind": "credit_card" for any credit/charge card; "bank_account" for checking/savings; "cash" for petty cash logs; "other" if unclear.
 - "period.start" / "period.end": the statement period start and end dates, in ISO YYYY-MM-DD. These bound the transactions included.
 - "period.statement_date": the statement close/issue/cycle date (usually printed near the top, often labelled "Statement Date", "Closing Date", or "Cycle Date"). For a credit-card statement that closes April 15 covering March 16 – April 15, the close date is 2026-04-15. Use this date as the canonical statement identifier.
-- "currency": ISO 4217 code. Default to "USD" if the document is clearly U.S. dollars but the code isn't printed.
+- "currency": ISO 4217 code. Always emit a string — default to "USD" if the document is clearly U.S. dollars but the code isn't printed. Never null.
 - "balances.opening": the balance at the start of the period (sometimes labelled "Previous Balance" or "Beginning Balance"). Null if not visible.
 - "balances.closing": the balance at the end of the period ("New Balance", "Ending Balance", "Statement Balance").
 - "balances.total_charges": sum of debits/charges/withdrawals for the period (as a POSITIVE number, even though individual line amounts are signed negative). Null if not summarized.
@@ -21,7 +21,9 @@ Output rules:
 LINE EXTRACTION RULES:
 - "lines[].amount" is SIGNED. CHARGES / WITHDRAWALS / DEBITS / PURCHASES are NEGATIVE numbers (money out of your account or onto your card balance). PAYMENTS / CREDITS / DEPOSITS / REFUNDS are POSITIVE numbers. Get the sign right — it's the most important field. If a card statement prints "(\$30.91)" or "-30.91" for a charge, output -30.91. If it prints "30.91" with no sign on a charge column, you must still flip the sign to negative.
 - "lines[].line_date": the date the transaction posted, ISO YYYY-MM-DD. If a statement prints two dates per line (e.g. "Trans Date / Post Date"), prefer the post date. Null if missing.
-- "lines[].description": the printed merchant/payee string, cleaned of obvious filler ("AMEX EPAYMENT ACH PMT" stays as-is; "STARBUCKS STORE #04421 SEATTLE WA" stays as-is — preserve the raw text for matching, do not normalize the merchant name here).
+- "lines[].description": the printed merchant/payee string, cleaned of obvious filler ("AMEX EPAYMENT ACH PMT" stays as-is; "STARBUCKS STORE #04421 SEATTLE WA" stays as-is — preserve the raw text for matching, do not normalize the merchant name here). Always emit a string; use "" only if the line genuinely has no description.
+- "lines[].notes": "" by default; populate only when there's something worth flagging (e.g. "FX conversion fee included").
+- "notes" (top-level): "" by default; populate only with brief reasoning when confidence is low or status is not "parsed".
 - "lines[].balance_after": only populate for bank statements where each line prints a running balance; null otherwise (credit-card statements typically don't).
 - Skip header rows, section dividers, summary rows, fee schedules, rewards/points footers, and disclaimer text. Only emit one line per real transaction.
 - If the statement has summary rows ("Total Purchases", "Total Payments") at the bottom, do NOT include them in lines — they go into balances.total_charges / total_payments instead.
