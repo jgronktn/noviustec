@@ -11,7 +11,11 @@ import { TOOL_DEFINITIONS } from "./tools.js";
 import { runTool } from "./handlers.js";
 
 const MODEL = "claude-sonnet-4-6";
-const MAX_TOKENS = 4096;
+// Bumped from 4096 — adaptive thinking shares this budget with the
+// visible output. Reconciliation-style questions over a moderately sized
+// ledger (dozens of GL rows + pending) burn through the smaller budget
+// before producing any visible answer.
+const MAX_TOKENS = 12000;
 const MAX_TURNS = 8;
 
 let _client = null;

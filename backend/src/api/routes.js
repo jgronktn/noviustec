@@ -1404,10 +1404,27 @@ export default async function apiRoutes(fastify, opts) {
         "X-Accel-Buffering": "no", // disable nginx proxy buffering
       });
 
+      let lastWriteAt = Date.now();
       const send = (event) => {
         if (res.writableEnded) return;
         res.write(`data: ${JSON.stringify(event)}\n\n`);
+        lastWriteAt = Date.now();
       };
+
+      // Adaptive thinking can sit silently for tens of seconds while the
+      // model reasons over a moderately sized ledger. Without traffic on
+      // the socket, nginx hits its proxy_read_timeout (~60s default) and
+      // drops the response — the browser surfaces that as a generic
+      // NetworkError. SSE comments (`: ping\n\n`) are spec-defined no-ops
+      // for clients but count as bytes on the wire, keeping nginx happy.
+      const KEEPALIVE_QUIET_MS = 20_000;
+      const keepalive = setInterval(() => {
+        if (res.writableEnded) return;
+        if (Date.now() - lastWriteAt >= KEEPALIVE_QUIET_MS) {
+          res.write(": ping\n\n");
+          lastWriteAt = Date.now();
+        }
+      }, 5_000);
 
       // If the client disconnects mid-stream we still want to drain the
       // agent loop's logging in `finally`, but stop writing.
@@ -1430,6 +1447,7 @@ export default async function apiRoutes(fastify, opts) {
         );
         send({ type: "error", error: err.message });
       } finally {
+        clearInterval(keepalive);
         req.log.info(
           { duration_ms: Date.now() - started },
           "agent chat finished",
