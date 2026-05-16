@@ -1,68 +1,92 @@
 // JSON schema for the statement parser's structured output.
 //
+// Used with output_config.format on messages.create() — the Anthropic API
+// enforces this shape. Constraints learned the hard way:
+// - every object needs additionalProperties: false
+// - no minimum / maximum / minLength etc (silently dropped at best, 400'd at worst)
+// - nullables use anyOf: [{...}, {type: "null"}] — `type: ["string","null"]`
+//   with an enum gets rejected ("Enum value X does not match declared type")
+// - enums only inside the non-null branch of an anyOf, never alongside a
+//   nullable type union.
+//
 // Two-tier shape: top-level metadata + a flat array of transaction lines.
 // Amounts on lines are SIGNED — negative = charge/withdrawal/debit,
 // positive = payment/deposit/credit. The model is told this in the prompt.
 
+const nullable = (...schemas) => ({ anyOf: [...schemas, { type: "null" }] });
+
 export const statementSchema = {
   type: "object",
   additionalProperties: false,
-  required: ["status", "confidence", "lines"],
+  required: [
+    "status",
+    "confidence",
+    "notes",
+    "source",
+    "period",
+    "currency",
+    "balances",
+    "lines",
+  ],
   properties: {
     status: {
       type: "string",
       enum: ["parsed", "not_a_statement", "ambiguous"],
     },
-    confidence: { type: "number" }, // 0..1 — bounds enforced in the prompt, not the schema
-    notes: { type: ["string", "null"] },
-    source: {
-      type: ["object", "null"],
-      additionalProperties: false,
-      properties: {
-        name: {
-          type: ["string", "null"],
-          description: "Account name as printed (e.g. 'Chase Business Visa')",
-        },
-        last4: { type: ["string", "null"] },
-        institution: { type: ["string", "null"] },
-        kind: {
-          type: ["string", "null"],
-          enum: ["credit_card", "bank_account", "cash", "other", null],
-        },
-      },
+    confidence: {
+      type: "number",
+      description:
+        "Self-assessed confidence 0.0-1.0. Use < 0.5 when significant fields are guessed.",
     },
-    period: {
-      type: ["object", "null"],
+    notes: nullable({ type: "string" }),
+    source: nullable({
+      type: "object",
       additionalProperties: false,
+      required: ["name", "last4", "institution", "kind"],
       properties: {
-        start: { type: ["string", "null"] }, // YYYY-MM-DD
-        end: { type: ["string", "null"] },
-        statement_date: { type: ["string", "null"] }, // close / issue date
+        name: nullable({ type: "string" }),
+        last4: nullable({ type: "string" }),
+        institution: nullable({ type: "string" }),
+        kind: nullable({
+          type: "string",
+          enum: ["credit_card", "bank_account", "cash", "other"],
+        }),
       },
-    },
-    currency: { type: ["string", "null"] }, // ISO 4217
-    balances: {
-      type: ["object", "null"],
+    }),
+    period: nullable({
+      type: "object",
       additionalProperties: false,
+      required: ["start", "end", "statement_date"],
       properties: {
-        opening: { type: ["number", "null"] },
-        closing: { type: ["number", "null"] },
-        total_charges: { type: ["number", "null"] }, // sum of negative amounts (as positive)
-        total_payments: { type: ["number", "null"] }, // sum of positive amounts
+        start: nullable({ type: "string" }), // YYYY-MM-DD
+        end: nullable({ type: "string" }),
+        statement_date: nullable({ type: "string" }), // close / issue date
       },
-    },
+    }),
+    currency: nullable({ type: "string" }), // ISO 4217
+    balances: nullable({
+      type: "object",
+      additionalProperties: false,
+      required: ["opening", "closing", "total_charges", "total_payments"],
+      properties: {
+        opening: nullable({ type: "number" }),
+        closing: nullable({ type: "number" }),
+        total_charges: nullable({ type: "number" }), // sum of charges as a POSITIVE number
+        total_payments: nullable({ type: "number" }),
+      },
+    }),
     lines: {
       type: "array",
       items: {
         type: "object",
         additionalProperties: false,
-        required: ["amount"],
+        required: ["line_date", "description", "amount", "balance_after", "notes"],
         properties: {
-          line_date: { type: ["string", "null"] }, // YYYY-MM-DD if visible
-          description: { type: ["string", "null"] },
+          line_date: nullable({ type: "string" }), // YYYY-MM-DD if visible
+          description: nullable({ type: "string" }),
           amount: { type: "number" }, // SIGNED — see prompt
-          balance_after: { type: ["number", "null"] },
-          notes: { type: ["string", "null"] },
+          balance_after: nullable({ type: "number" }),
+          notes: nullable({ type: "string" }),
         },
       },
     },
