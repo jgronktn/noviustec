@@ -13,7 +13,7 @@ export const statementSchema = {
       type: "string",
       enum: ["parsed", "not_a_statement", "ambiguous"],
     },
-    confidence: { type: "number", minimum: 0, maximum: 1 },
+    confidence: { type: "number" }, // 0..1 — bounds enforced in the prompt, not the schema
     notes: { type: ["string", "null"] },
     source: {
       type: ["object", "null"],
