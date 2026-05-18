@@ -9,7 +9,8 @@
     "parse-fixtures": "node scripts/parse-fixtures.js",
     "init-ledger": "node scripts/init-ledger.js",
     "inspect-ledger": "node scripts/inspect-ledger.js",
-    "merge-vendor": "node scripts/merge-vendor.js"
+    "merge-vendor": "node scripts/merge-vendor.js",
+    "link-awaiting-to-txn": "node scripts/link-awaiting-to-txn.js"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.96.0",
