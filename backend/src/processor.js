@@ -23,6 +23,7 @@ import {
   getKnownVendors,
   addPending,
 } from "./ledger/index.js";
+import { sendParseReply } from "./notifications/email.js";
 
 const SUPPORTED_UPLOAD_TYPES = new Set([
   "application/pdf",
@@ -81,6 +82,14 @@ export async function processReceiptPayload({ payload, logger, logDir, sourceFil
         usage: result.usage,
       },
       "receipt parsed",
+    );
+
+    // Fire-and-forget confirmation email back to the sender. No-ops for
+    // direct UI uploads (synthetic "(uploaded by user)" From), for missing
+    // POSTMARK_FROM config, and for Postmark API errors — none of those
+    // should block the webhook from returning 200.
+    sendParseReply({ payload, result, logger }).catch((err) =>
+      logger.error({ err: err.message }, "sendParseReply unexpected throw"),
     );
 
     return { result, pending_id: pendingId, source_file: sourceFilename };
