@@ -164,16 +164,7 @@ function fmtAmount(n, currency = "USD") {
           </h3>
           <p class="ed-sub mono">{{ awaitingId }}</p>
         </div>
-        <div class="ed-head-actions">
-          <button
-            v-if="canPay"
-            class="ed-pay-cta"
-            :disabled="submitting"
-            @click="recordPayment"
-            title="Open the Record-payment dialog for this invoice"
-          >Record payment →</button>
-          <button class="ed-close" :disabled="submitting" @click="emit('cancel')" aria-label="Close">×</button>
-        </div>
+        <button class="ed-close" :disabled="submitting" @click="emit('cancel')" aria-label="Close">×</button>
       </header>
 
       <p class="ed-hint">
@@ -227,6 +218,14 @@ function fmtAmount(n, currency = "USD") {
         <p v-if="error" class="ed-error">{{ error }}</p>
 
         <div class="ed-actions">
+          <button
+            v-if="canPay"
+            type="button"
+            class="ed-pay-cta"
+            :disabled="submitting"
+            @click="recordPayment"
+            title="Open the Record-payment dialog for this invoice"
+          >Record payment →</button>
           <button type="button" class="ghost" :disabled="submitting" @click="emit('cancel')">
             Cancel
           </button>
@@ -334,22 +333,18 @@ function fmtAmount(n, currency = "USD") {
   color: var(--text-muted);
 }
 
-.ed-head-actions {
-  display: flex;
-  align-items: center;
-  gap: 0.4rem;
-}
-
 .ed-pay-cta {
   background: var(--accent);
   color: white;
   border: 1px solid var(--accent);
-  font-size: 0.75rem;
+  font-size: 0.8rem;
   font-weight: 600;
-  padding: 0.3rem 0.7rem;
+  padding: 0.35rem 0.85rem;
   border-radius: 4px;
   cursor: pointer;
   white-space: nowrap;
+  /* Push the button to the lower-left while Cancel + Save stay right. */
+  margin-right: auto;
 }
 
 .ed-pay-cta:hover:not(:disabled) {
