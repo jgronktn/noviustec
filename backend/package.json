@@ -10,7 +10,8 @@
     "init-ledger": "node scripts/init-ledger.js",
     "inspect-ledger": "node scripts/inspect-ledger.js",
     "merge-vendor": "node scripts/merge-vendor.js",
-    "link-awaiting-to-txn": "node scripts/link-awaiting-to-txn.js"
+    "link-awaiting-to-txn": "node scripts/link-awaiting-to-txn.js",
+    "repair-schema-shift-2026-05-20": "node scripts/repair-schema-shift-2026-05-20.js"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.96.0",

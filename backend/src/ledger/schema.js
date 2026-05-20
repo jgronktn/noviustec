@@ -5,6 +5,16 @@
 //   add/read rows by object).
 // - Column types are enforced when reading back (see workbook.js / pending.js).
 // - Header row gets bold + light-gray formatting (set in workbook.js).
+//
+// ⚠️ MIGRATIONS: new columns added to an existing sheet MUST APPEND at
+// the END of the column array. NEVER insert mid-sheet. ExcelJS reassigns
+// column keys when a workbook reloads but does NOT move existing cell
+// data — inserting mid-sheet shifts every legacy row's values
+// one column right and silently corrupts the data. We learned this the
+// hard way on 2026-05-20 (see scripts/repair-schema-shift-2026-05-20.js).
+// If the logical column ordering of a sheet matters to you, factor that
+// in BEFORE the first import; you can't reorder later without a
+// migration script.
 
 export const SHEETS = {
   CATEGORIES: "Categories",
