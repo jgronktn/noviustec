@@ -249,7 +249,7 @@ const monthGroups = computed(() => {
                 { 'vt-card-clickable': isCardInteractive(ev) },
                 { 'vt-card-linked': isLinkedActive(ev) },
               ]"
-              :title="isPayClickable(ev) ? 'Click to record payment' : (canEdit(ev) ? 'Click to edit' : (ev.description || ''))"
+              :title="canEdit(ev) ? 'Click to edit' : (ev.description || '')"
               @click="handleCardClick(ev)"
             >
               <span class="vt-card-kind">{{ kindLabel(ev.kind) }}</span>
