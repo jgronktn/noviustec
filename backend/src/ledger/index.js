@@ -11,7 +11,12 @@ export {
   updatePendingStatus,
   updatePendingFromParse,
 } from "./pending.js";
-export { addTransaction, listTransactions, getTransaction } from "./transactions.js";
+export {
+  addTransaction,
+  listTransactions,
+  getTransaction,
+  updateTransaction,
+} from "./transactions.js";
 export {
   addDocument,
   listDocuments,
@@ -23,6 +28,7 @@ export {
   addAwaitingPayment,
   listAwaiting,
   getAwaiting,
+  updateAwaiting,
   markAwaitingPaid,
   findMatchCandidates,
 } from "./awaiting.js";

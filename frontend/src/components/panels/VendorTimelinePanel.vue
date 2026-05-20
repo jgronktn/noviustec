@@ -9,6 +9,7 @@ const props = defineProps({
 // false on cancel. Optional so the component still renders fine in
 // contexts where the dialog isn't mounted.
 const openPaymentDialog = inject("openPaymentDialog", null);
+const openEditDialog = inject("openEditDialog", null);
 
 // Locally-recorded paid awaitings so the card visually flips to "paid"
 // after the dialog resolves — the panel's incoming data is a snapshot
@@ -49,8 +50,19 @@ function isPayClickable(ev) {
   );
 }
 
+function canEdit(ev) {
+  if (!openEditDialog) return false;
+  // Right-side payment cards always edit the GL row.
+  if (ev.kind === "payment") return true;
+  // Left awaiting cards (any status) → edit AwaitingPayment.
+  if (ev.source === "awaiting") return true;
+  // Left GL doc cards (paid receipts/confirmations/etc.) → edit GL row.
+  if (ev.source === "gl") return true;
+  return false;
+}
+
 function isCardInteractive(ev) {
-  return isPayClickable(ev) || hasLinkedSibling(ev);
+  return isPayClickable(ev) || canEdit(ev);
 }
 
 function effectiveStatus(ev) {
@@ -58,6 +70,7 @@ function effectiveStatus(ev) {
 }
 
 async function handleCardClick(ev) {
+  // 1. Unpaid awaiting invoices → Record-payment flow (unchanged).
   if (isPayClickable(ev)) {
     const paid = await openPaymentDialog({
       id: ev.id,
@@ -74,9 +87,28 @@ async function handleCardClick(ev) {
     }
     return;
   }
-  if (hasLinkedSibling(ev)) {
-    highlightedLinkId.value =
-      highlightedLinkId.value === ev.link_id ? null : ev.link_id;
+
+  // 2. Anything else clickable → open the appropriate Edit dialog.
+  if (!openEditDialog) return;
+
+  if (ev.kind === "payment") {
+    // Right-side payment card → edit the GL row.
+    await openEditDialog({ kind: "transaction", id: ev.id });
+    return;
+  }
+
+  if (ev.source === "awaiting") {
+    // Left-side awaiting card (paid / written off / etc.) → edit Awaiting.
+    await openEditDialog({ kind: "awaiting", id: ev.id });
+    return;
+  }
+
+  if (ev.source === "gl") {
+    // Left-side GL doc card (paid receipt / confirmation / etc.) — strip
+    // the "-doc" suffix to get the underlying GL row id.
+    const txnId = ev.id.replace(/-doc$/, "");
+    await openEditDialog({ kind: "transaction", id: txnId });
+    return;
   }
 }
 
@@ -250,7 +282,7 @@ const monthGroups = computed(() => {
                 { 'vt-card-clickable': isCardInteractive(ev) },
                 { 'vt-card-linked': isLinkedActive(ev) },
               ]"
-              :title="isPayClickable(ev) ? 'Click to record payment' : (hasLinkedSibling(ev) ? 'Click to highlight linked payment' : (ev.description || ''))"
+              :title="isPayClickable(ev) ? 'Click to record payment' : (canEdit(ev) ? 'Click to edit' : (ev.description || ''))"
               @click="handleCardClick(ev)"
             >
               <span class="vt-card-kind">{{ kindLabel(ev.kind) }}</span>
@@ -286,7 +318,7 @@ const monthGroups = computed(() => {
                 { 'vt-card-clickable': hasLinkedSibling(ev) },
                 { 'vt-card-linked': isLinkedActive(ev) },
               ]"
-              :title="hasLinkedSibling(ev) ? 'Click to highlight linked invoice' : (ev.description || '')"
+              :title="canEdit(ev) ? 'Click to edit' : (ev.description || '')"
               @click="handleCardClick(ev)"
             >
               <span class="vt-card-kind">{{ kindLabel(ev.kind) }}</span>

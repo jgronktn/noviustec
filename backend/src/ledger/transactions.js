@@ -58,6 +58,58 @@ export async function getTransaction(id) {
   return all.find((t) => t.id === id) ?? null;
 }
 
+const TXN_PATCHABLE_FIELDS = new Set([
+  "vendor",
+  "date",
+  "amount",
+  "currency",
+  "category",
+  "payment_source",
+  "reference_number",
+  "reference_kind",
+  "description",
+  "notes",
+]);
+
+/**
+ * Update an existing GL row in place. Only whitelisted fields are
+ * patchable — id, document_path, source_file, pending_id, created_at,
+ * created_by are intentionally locked because they encode provenance.
+ *
+ * Throws if the row id doesn't exist. Coerces YYYY-MM-DD strings into
+ * Date objects so the date cell renders consistently. Returns the
+ * applied patch keys for the route to log + the row's id.
+ */
+export async function updateTransaction(id, patch) {
+  return withWorkbookWrite(async (wb) => {
+    const sheet = wb.getWorksheet(SHEETS.GL);
+    let target = null;
+    sheet.eachRow({ includeEmpty: false }, (row, rowNumber) => {
+      if (rowNumber === 1) return;
+      if (row.getCell("id").value === id) target = row;
+    });
+    if (!target) throw new Error(`GL row not found: ${id}`);
+
+    const applied = [];
+    for (const [key, value] of Object.entries(patch ?? {})) {
+      if (!TXN_PATCHABLE_FIELDS.has(key)) continue;
+      if (value === undefined) continue;
+      if (
+        key === "date" &&
+        typeof value === "string" &&
+        /^\d{4}-\d{2}-\d{2}$/.test(value)
+      ) {
+        target.getCell(key).value = new Date(value + "T00:00:00Z");
+      } else {
+        target.getCell(key).value = value;
+      }
+      applied.push(key);
+    }
+    if (applied.length > 0) target.commit();
+    return { id, fields_updated: applied };
+  });
+}
+
 export async function listTransactions({ from, to, category, payment_source } = {}) {
   return withWorkbookRead(async (wb) => {
     const sheet = wb.getWorksheet(SHEETS.GL);

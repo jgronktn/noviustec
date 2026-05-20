@@ -72,6 +72,22 @@ export function fetchVendorTimeline(token, { vendor, from, to } = {}) {
   return request(token, "GET", `/api/vendor-timeline?${params.toString()}`);
 }
 
+/** Fetch one GL transaction by id (used by the timeline edit dialog). */
+export const fetchTransaction = (token, id) =>
+  request(token, "GET", `/api/transactions/${encodeURIComponent(id)}`);
+
+/** Fetch one AwaitingPayment row by id. */
+export const fetchAwaiting = (token, id) =>
+  request(token, "GET", `/api/awaiting/${encodeURIComponent(id)}`);
+
+/** Edit a GL transaction. Body is a partial — only patchable fields are accepted server-side. */
+export const updateTransaction = (token, id, body) =>
+  request(token, "PATCH", `/api/transactions/${encodeURIComponent(id)}`, body);
+
+/** Edit an AwaitingPayment row (status / paid_txn_id are not patchable here — use Record-payment). */
+export const updateAwaiting = (token, id, body) =>
+  request(token, "PATCH", `/api/awaiting/${encodeURIComponent(id)}`, body);
+
 /**
  * Record a manual payment against an outstanding AwaitingPayment row.
  * No receipt document required — for checks, credit-card charges with

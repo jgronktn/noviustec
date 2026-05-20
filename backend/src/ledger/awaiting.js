@@ -92,6 +92,54 @@ export async function markAwaitingPaid(id, { paid_txn_id }) {
   });
 }
 
+const AWAITING_PATCHABLE_FIELDS = new Set([
+  "vendor",
+  "date",
+  "amount",
+  "currency",
+  "reference_number",
+  "reference_kind",
+  "description",
+  "notes",
+]);
+
+/**
+ * Update an AwaitingPayment row in place. Locked fields (immutable here):
+ *   id, status, paid_at, paid_txn_id (use markAwaitingPaid),
+ *   document_path, source_file, pending_id, created_at.
+ *
+ * Throws if the row id doesn't exist. Returns the patch keys applied.
+ */
+export async function updateAwaiting(id, patch) {
+  return withWorkbookWrite(async (wb) => {
+    const sheet = wb.getWorksheet(SHEETS.AWAITING);
+    let target = null;
+    sheet.eachRow({ includeEmpty: false }, (row, rowNumber) => {
+      if (rowNumber === 1) return;
+      if (row.getCell("id").value === id) target = row;
+    });
+    if (!target) throw new Error(`AwaitingPayment row not found: ${id}`);
+
+    const applied = [];
+    for (const [key, value] of Object.entries(patch ?? {})) {
+      if (!AWAITING_PATCHABLE_FIELDS.has(key)) continue;
+      if (value === undefined) continue;
+      if (
+        key === "date" &&
+        typeof value === "string" &&
+        /^\d{4}-\d{2}-\d{2}$/.test(value)
+      ) {
+        target.getCell(key).value = new Date(value + "T00:00:00Z");
+      } else {
+        target.getCell(key).value = value;
+      }
+      applied.push(key);
+    }
+    if (applied.length > 0) target.commit();
+    return { id, fields_updated: applied };
+  });
+}
+
 /**
  * Find awaiting rows for a vendor + total (within ±$0.01) that haven't
  * been paid. Used by /api/pending/:id to suggest matches.

@@ -5,6 +5,8 @@ import InboxPanel from "./components/InboxPanel.vue";
 import PromptPanel from "./components/PromptPanel.vue";
 import DashboardPanel from "./components/DashboardPanel.vue";
 import RecordPaymentDialog from "./components/RecordPaymentDialog.vue";
+import EditTransactionDialog from "./components/EditTransactionDialog.vue";
+import EditAwaitingDialog from "./components/EditAwaitingDialog.vue";
 import { fetchMainTimeline, fetchVendorTimeline } from "./api.js";
 
 // Injected by vite.config.js at build time. Hover the badge to see when
@@ -54,6 +56,36 @@ function handlePaymentCancel() {
   paymentDialogResolver?.(false);
   paymentDialogResolver = null;
   paymentDialogAwaiting.value = null;
+}
+
+// ── Edit dialog (GL transactions + AwaitingPayment rows) ───────────────
+// Mounted at App level so any panel can request an edit by id without
+// owning its own modal state. Inject `openEditDialog`, call with
+// { kind: "transaction" | "awaiting", id }. Returns a Promise<boolean>
+// resolving to true if the user saved a change, false on cancel.
+const editDialog = ref(null); // { kind, id } | null
+let editDialogResolver = null;
+
+function openEditDialog({ kind, id }) {
+  if (!kind || !id) return Promise.resolve(false);
+  return new Promise((resolve) => {
+    editDialog.value = { kind, id };
+    editDialogResolver = resolve;
+  });
+}
+provide("openEditDialog", openEditDialog);
+
+function handleEditSuccess() {
+  editDialogResolver?.(true);
+  editDialogResolver = null;
+  editDialog.value = null;
+  signalLedgerChange();
+}
+
+function handleEditCancel() {
+  editDialogResolver?.(false);
+  editDialogResolver = null;
+  editDialog.value = null;
 }
 
 // Agent-pushed canvas panels. Newest on top. Persists across review-panel
@@ -230,6 +262,20 @@ watch(token, (next, prev) => {
     :awaiting="paymentDialogAwaiting"
     @success="handlePaymentSuccess"
     @cancel="handlePaymentCancel"
+  />
+
+  <EditTransactionDialog
+    v-if="editDialog?.kind === 'transaction'"
+    :txn-id="editDialog.id"
+    @success="handleEditSuccess"
+    @cancel="handleEditCancel"
+  />
+
+  <EditAwaitingDialog
+    v-if="editDialog?.kind === 'awaiting'"
+    :awaiting-id="editDialog.id"
+    @success="handleEditSuccess"
+    @cancel="handleEditCancel"
   />
 </template>
 

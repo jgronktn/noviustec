@@ -17,6 +17,8 @@ import {
   updatePendingStatus,
   updatePendingFromParse,
   addTransaction,
+  updateTransaction,
+  updateAwaiting,
   getLedgerPath,
   getDocument,
   getKnownVendors,
@@ -611,6 +613,157 @@ export default async function apiRoutes(fastify, opts) {
     if (!row) return reply.code(404).send({ error: "AwaitingPayment row not found" });
     return row;
   });
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // GET /api/transactions/:id — single GL row by id. Used by the timeline
+  // edit dialog to fetch the full record (notes, description, etc.) that
+  // the timeline event doesn't carry.
+  // ─────────────────────────────────────────────────────────────────────────
+  fastify.get("/api/transactions/:id", async (req, reply) => {
+    const row = await getTransaction(req.params.id);
+    if (!row) return reply.code(404).send({ error: "Transaction not found" });
+    return row;
+  });
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // PATCH /api/transactions/:id — edit a GL row from the timeline.
+  // Only patchable fields accepted (id / provenance / created_at locked).
+  // ─────────────────────────────────────────────────────────────────────────
+  fastify.patch(
+    "/api/transactions/:id",
+    {
+      schema: {
+        body: {
+          type: "object",
+          additionalProperties: false,
+          properties: {
+            vendor: { type: "string", minLength: 1 },
+            date: { type: "string" },
+            amount: { type: "number" },
+            currency: { type: "string", minLength: 1 },
+            category: { type: "string", minLength: 1 },
+            payment_source: { type: ["string", "null"] },
+            reference_number: { type: ["string", "null"] },
+            reference_kind: {
+              type: ["string", "null"],
+              enum: [
+                "invoice",
+                "receipt",
+                "order",
+                "transaction",
+                "confirmation",
+                "other",
+                null,
+              ],
+            },
+            description: { type: "string" },
+            notes: { type: "string" },
+          },
+        },
+      },
+    },
+    async (req, reply) => {
+      const existing = await getTransaction(req.params.id);
+      if (!existing) {
+        return reply.code(404).send({ error: "Transaction not found" });
+      }
+
+      // Register a brand-new payment source on edit just like Record-payment
+      // does — keeps the Sources sheet in sync with what's in the GL.
+      const patch = { ...req.body };
+      if (patch.payment_source) {
+        try {
+          const { name } = await ensurePaymentSource(patch.payment_source);
+          if (name) patch.payment_source = name;
+        } catch (err) {
+          req.log.error(
+            { err: err.message },
+            "ensurePaymentSource during edit failed; keeping raw value",
+          );
+        }
+      }
+
+      try {
+        const result = await updateTransaction(req.params.id, patch);
+        const updated = await getTransaction(req.params.id);
+        req.log.info(
+          {
+            txn_id: req.params.id,
+            fields: result.fields_updated,
+          },
+          "GL row edited",
+        );
+        return updated;
+      } catch (err) {
+        req.log.error(
+          { err: err.message, txn_id: req.params.id },
+          "updateTransaction failed",
+        );
+        return reply.code(500).send({ error: err.message });
+      }
+    },
+  );
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // PATCH /api/awaiting/:id — edit an AwaitingPayment row from the timeline.
+  // Does NOT touch status / paid_at / paid_txn_id (use Record-payment).
+  // ─────────────────────────────────────────────────────────────────────────
+  fastify.patch(
+    "/api/awaiting/:id",
+    {
+      schema: {
+        body: {
+          type: "object",
+          additionalProperties: false,
+          properties: {
+            vendor: { type: "string", minLength: 1 },
+            date: { type: "string" },
+            amount: { type: "number" },
+            currency: { type: "string", minLength: 1 },
+            reference_number: { type: ["string", "null"] },
+            reference_kind: {
+              type: ["string", "null"],
+              enum: [
+                "invoice",
+                "receipt",
+                "order",
+                "transaction",
+                "confirmation",
+                "other",
+                null,
+              ],
+            },
+            description: { type: "string" },
+            notes: { type: "string" },
+          },
+        },
+      },
+    },
+    async (req, reply) => {
+      const existing = await getAwaiting(req.params.id);
+      if (!existing) {
+        return reply.code(404).send({ error: "AwaitingPayment row not found" });
+      }
+      try {
+        const result = await updateAwaiting(req.params.id, req.body);
+        const updated = await getAwaiting(req.params.id);
+        req.log.info(
+          {
+            awaiting_id: req.params.id,
+            fields: result.fields_updated,
+          },
+          "AwaitingPayment row edited",
+        );
+        return updated;
+      } catch (err) {
+        req.log.error(
+          { err: err.message, awaiting_id: req.params.id },
+          "updateAwaiting failed",
+        );
+        return reply.code(500).send({ error: err.message });
+      }
+    },
+  );
 
   // ─────────────────────────────────────────────────────────────────────────
   // POST /api/awaiting/:id/pay — record a manual payment against an
