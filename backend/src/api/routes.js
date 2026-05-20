@@ -23,6 +23,8 @@ import {
   getDocument,
   getKnownVendors,
   addStatement,
+  updateStatementLine,
+  listStatementLines,
 } from "../ledger/index.js";
 import { parseReceipt } from "../parser/index.js";
 import {
@@ -50,6 +52,10 @@ import {
 } from "../ledger/index.js";
 import { runAgent } from "../agent/loop.js";
 import { buildTimelineProps } from "../agent/handlers.js";
+import {
+  autoMatchStatement,
+  buildReconciliationView,
+} from "../reconciliation/index.js";
 
 // Hardcoded for single-tenant v1. Eventually derived from authenticated session.
 const COMPANY_ID = process.env.NOVIUSTEC_COMPANY_ID || "default";
@@ -1464,6 +1470,118 @@ export default async function apiRoutes(fastify, opts) {
       };
     },
   );
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // POST /api/statements/:id/reconcile — run the auto-match heuristic
+  // against any unmatched negative-amount lines on the statement.
+  // Idempotent: only touches lines without an existing match_method.
+  // Updates Statements.status as a side effect.
+  // ─────────────────────────────────────────────────────────────────────────
+  fastify.post("/api/statements/:id/reconcile", async (req, reply) => {
+    try {
+      const result = await autoMatchStatement(req.params.id);
+      req.log.info(
+        {
+          statement_id: req.params.id,
+          matched: result.matched,
+          attempted: result.attempted,
+        },
+        "statement auto-match run",
+      );
+      return result;
+    } catch (err) {
+      const notFound = /Statement not found/i.test(err.message ?? "");
+      req.log.error(
+        { err: err.message, statement_id: req.params.id },
+        "autoMatchStatement failed",
+      );
+      return reply.code(notFound ? 404 : 500).send({ error: err.message });
+    }
+  });
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // GET /api/statements/:id/reconciliation — return the full panel
+  // payload (matched pairs + unmatched lines + unreconciled GL +
+  // source diagnostic). Stateless; doesn't mutate anything.
+  // ─────────────────────────────────────────────────────────────────────────
+  fastify.get("/api/statements/:id/reconciliation", async (req, reply) => {
+    const view = await buildReconciliationView(req.params.id);
+    if (!view) return reply.code(404).send({ error: "Statement not found" });
+    return view;
+  });
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // POST /api/statement-lines/:id/match — manually pair a statement line
+  // with a GL transaction. Use when the auto-match heuristic missed.
+  // ─────────────────────────────────────────────────────────────────────────
+  fastify.post(
+    "/api/statement-lines/:id/match",
+    {
+      schema: {
+        body: {
+          type: "object",
+          required: ["txn_id"],
+          additionalProperties: false,
+          properties: { txn_id: { type: "string", minLength: 1 } },
+        },
+      },
+    },
+    async (req, reply) => {
+      try {
+        const { id } = req.params;
+        const txn = await getTransaction(req.body.txn_id);
+        if (!txn) {
+          return reply.code(404).send({ error: "Transaction not found" });
+        }
+        // Reject if the GL row is already matched to a different line.
+        const allLines = await listStatementLines();
+        const otherClaim = allLines.find(
+          (l) => l.matched_txn_id === req.body.txn_id && l.id !== id,
+        );
+        if (otherClaim) {
+          return reply.code(409).send({
+            error: `Transaction ${req.body.txn_id} is already matched to line ${otherClaim.id}`,
+          });
+        }
+        const result = await updateStatementLine(id, {
+          matched_txn_id: req.body.txn_id,
+          match_method: "manual",
+        });
+        req.log.info(
+          { line_id: id, txn_id: req.body.txn_id, method: "manual" },
+          "statement line matched",
+        );
+        return result;
+      } catch (err) {
+        req.log.error(
+          { err: err.message, line_id: req.params.id },
+          "manual match failed",
+        );
+        return reply.code(500).send({ error: err.message });
+      }
+    },
+  );
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // POST /api/statement-lines/:id/unmatch — clear an existing match,
+  // returning the line to the unmatched bucket.
+  // ─────────────────────────────────────────────────────────────────────────
+  fastify.post("/api/statement-lines/:id/unmatch", async (req, reply) => {
+    try {
+      const result = await updateStatementLine(req.params.id, {
+        matched_txn_id: null,
+        match_method: null,
+      });
+      req.log.info({ line_id: req.params.id }, "statement line unmatched");
+      return result;
+    } catch (err) {
+      req.log.error(
+        { err: err.message, line_id: req.params.id },
+        "unmatch failed",
+      );
+      return reply.code(500).send({ error: err.message });
+    }
+  });
 
   // ─────────────────────────────────────────────────────────────────────────
   // GET /api/documents/statement/:id — download an archived statement PDF.

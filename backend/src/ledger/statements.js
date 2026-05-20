@@ -96,6 +96,68 @@ export async function getStatement(id) {
   return rows.find((r) => r.id === id) ?? null;
 }
 
+const STATEMENT_LINE_PATCHABLE = new Set([
+  "matched_txn_id",
+  "match_method",
+  "notes",
+]);
+
+/**
+ * Update a single StatementLine row in place. Used by the reconciliation
+ * workflow to set / clear the matched_txn_id link to a GL row.
+ *
+ * Locked fields: id, statement_id, line_date, description, amount,
+ * balance_after, created_at — everything that's source-of-truth from
+ * the parser. The reconciliation flow only ever writes the match
+ * pointer.
+ */
+export async function updateStatementLine(id, patch) {
+  return withWorkbookWrite(async (wb) => {
+    const sheet = wb.getWorksheet(SHEETS.STATEMENT_LINES);
+    let target = null;
+    sheet.eachRow({ includeEmpty: false }, (row, rowNumber) => {
+      if (rowNumber === 1) return;
+      if (row.getCell("id").value === id) target = row;
+    });
+    if (!target) throw new Error(`StatementLine not found: ${id}`);
+
+    const applied = [];
+    for (const [key, value] of Object.entries(patch ?? {})) {
+      if (!STATEMENT_LINE_PATCHABLE.has(key)) continue;
+      target.getCell(key).value = value;
+      applied.push(key);
+    }
+    if (applied.length > 0) target.commit();
+    return { id, fields_updated: applied };
+  });
+}
+
+/**
+ * Update a single Statements row in place. Used by reconciliation to
+ * flip status (imported → partially_reconciled → reconciled) without
+ * touching the per-line data.
+ */
+export async function updateStatement(id, patch) {
+  const PATCHABLE = new Set(["status", "notes"]);
+  return withWorkbookWrite(async (wb) => {
+    const sheet = wb.getWorksheet(SHEETS.STATEMENTS);
+    let target = null;
+    sheet.eachRow({ includeEmpty: false }, (row, rowNumber) => {
+      if (rowNumber === 1) return;
+      if (row.getCell("id").value === id) target = row;
+    });
+    if (!target) throw new Error(`Statement not found: ${id}`);
+    const applied = [];
+    for (const [k, v] of Object.entries(patch ?? {})) {
+      if (!PATCHABLE.has(k)) continue;
+      target.getCell(k).value = v;
+      applied.push(k);
+    }
+    if (applied.length > 0) target.commit();
+    return { id, fields_updated: applied };
+  });
+}
+
 export async function listStatementLines({ statement_id } = {}) {
   return withWorkbookRead(async (wb) => {
     const sheet = wb.getWorksheet(SHEETS.STATEMENT_LINES);

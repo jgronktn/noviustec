@@ -37,4 +37,6 @@ export {
   listStatements,
   getStatement,
   listStatementLines,
+  updateStatementLine,
+  updateStatement,
 } from "./statements.js";

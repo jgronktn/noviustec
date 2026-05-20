@@ -1,0 +1,794 @@
+<script setup>
+import { ref, computed, inject } from "vue";
+import {
+  matchStatementLine,
+  unmatchStatementLine,
+  fetchReconciliation,
+} from "../../api.js";
+
+const props = defineProps({
+  data: { type: Object, required: true },
+});
+
+const token = inject("apiToken");
+const signalLedgerChange = inject("signalLedgerChange", () => {});
+
+// Local mirror of the panel data so we can re-fetch after manual
+// matches without waiting for the parent to push fresh props.
+const view = ref(props.data);
+
+// Which line is currently picking a GL row?
+const pickingForLineId = ref(null);
+const pickingError = ref(null);
+const busyLineIds = ref(new Set());
+
+function fmt(amount, currency = "USD") {
+  if (amount == null) return "—";
+  return new Intl.NumberFormat("en-US", {
+    style: "currency",
+    currency,
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  }).format(amount);
+}
+
+function shortDate(d) {
+  return d ? String(d).slice(0, 10) : "—";
+}
+
+function setBusy(lineId, busy) {
+  const next = new Set(busyLineIds.value);
+  if (busy) next.add(lineId);
+  else next.delete(lineId);
+  busyLineIds.value = next;
+}
+
+async function refresh() {
+  try {
+    const fresh = await fetchReconciliation(token.value, view.value.statement.id);
+    view.value = fresh;
+  } catch (e) {
+    pickingError.value = `Refresh failed: ${e.message}`;
+  }
+}
+
+async function manualMatch(lineId, txnId) {
+  pickingError.value = null;
+  setBusy(lineId, true);
+  try {
+    await matchStatementLine(token.value, lineId, txnId);
+    await refresh();
+    pickingForLineId.value = null;
+    signalLedgerChange();
+  } catch (e) {
+    pickingError.value = e.message || "Match failed.";
+  } finally {
+    setBusy(lineId, false);
+  }
+}
+
+async function unmatch(lineId) {
+  pickingError.value = null;
+  setBusy(lineId, true);
+  try {
+    await unmatchStatementLine(token.value, lineId);
+    await refresh();
+    signalLedgerChange();
+  } catch (e) {
+    pickingError.value = e.message || "Unmatch failed.";
+  } finally {
+    setBusy(lineId, false);
+  }
+}
+
+// Match-picker dropdown: when the user clicks "Match…" on an unmatched
+// line, show GL candidates ordered by amount proximity then date.
+function candidatesForLine(line) {
+  const targetAmount = Math.abs(Number(line.amount));
+  return [...view.value.unreconciled_gl]
+    .map((g) => ({
+      ...g,
+      _amount_diff: Math.abs(Number(g.amount) - targetAmount),
+      _date_diff: g.date && line.line_date
+        ? Math.abs(new Date(g.date) - new Date(line.line_date)) / 86400000
+        : 999,
+    }))
+    .sort((a, b) => {
+      if (a._amount_diff !== b._amount_diff) return a._amount_diff - b._amount_diff;
+      return a._date_diff - b._date_diff;
+    });
+}
+
+const statusPillClass = computed(() => {
+  const s = view.value?.statement?.status;
+  if (s === "reconciled") return "status-reconciled";
+  if (s === "partially_reconciled") return "status-partially_reconciled";
+  if (s === "needs_attention") return "status-needs_attention";
+  return "status-imported";
+});
+
+// If the agent gave us an error string we render only that.
+const hasError = computed(() => view.value && typeof view.value.error === "string");
+</script>
+
+<template>
+  <div v-if="hasError" class="rc-empty">
+    {{ view.error }}
+  </div>
+
+  <div v-else class="rc-panel">
+    <!-- Header -->
+    <header class="rc-head">
+      <div class="rc-head-main">
+        <h3 class="rc-source">{{ view.statement.source }}</h3>
+        <p class="rc-period mono">
+          {{ shortDate(view.statement.period_start) }} →
+          {{ shortDate(view.statement.period_end) }}
+          · close {{ shortDate(view.statement.statement_date) }}
+        </p>
+      </div>
+      <div class="rc-head-stats">
+        <span class="status-pill" :class="statusPillClass">
+          {{ view.statement.status.replace(/_/g, " ") }}
+        </span>
+        <span class="count-chip">{{ view.counts.matched }} matched</span>
+        <span class="count-chip warn" v-if="view.counts.unmatched_debit > 0">
+          {{ view.counts.unmatched_debit }} unmatched
+        </span>
+        <span class="count-chip muted" v-if="view.counts.unmatched_credit > 0">
+          {{ view.counts.unmatched_credit }} credits
+        </span>
+        <span class="count-chip info" v-if="view.counts.unreconciled_gl > 0">
+          {{ view.counts.unreconciled_gl }} GL only
+        </span>
+      </div>
+    </header>
+
+    <!-- Balances summary line -->
+    <p class="rc-balances mono">
+      Opening {{ fmt(view.statement.opening_balance, view.statement.currency) }}
+      · Closing {{ fmt(view.statement.closing_balance, view.statement.currency) }}
+      · Charges {{ fmt(view.statement.total_charges, view.statement.currency) }}
+      · Payments {{ fmt(view.statement.total_payments, view.statement.currency) }}
+    </p>
+
+    <p v-if="pickingError" class="rc-error">{{ pickingError }}</p>
+
+    <!-- Source diagnostic — shown when nothing matched and there ARE GL rows -->
+    <div
+      v-if="view.source_diagnostic && view.source_diagnostic.gl_matched_count === 0 && view.source_diagnostic.gl_sources_not_matching.length > 0"
+      class="rc-diagnostic"
+    >
+      <strong>No GL rows matched this statement's source.</strong>
+      The statement says
+      <code>{{ view.source_diagnostic.statement_source }}</code>
+      but the GL rows in this period use:
+      <ul>
+        <li
+          v-for="s in view.source_diagnostic.gl_sources_not_matching"
+          :key="s.name"
+        ><code>{{ s.name }}</code> ({{ s.count }})</li>
+      </ul>
+      Tip: open one of the GL rows on the timeline and rename its
+      <em>Payment source</em> to match the statement (matching on the
+      last 4 of the account is enough). Then re-ask to reconcile.
+    </div>
+
+    <!-- Matched -->
+    <section v-if="view.matched.length > 0" class="rc-section">
+      <h4 class="rc-section-title">Matched ({{ view.matched.length }})</h4>
+      <div class="rc-pair-list">
+        <div
+          v-for="pair in view.matched"
+          :key="pair.id"
+          class="rc-pair"
+          :class="{ busy: busyLineIds.has(pair.id) }"
+        >
+          <div class="rc-line side-line">
+            <div class="rc-line-head">
+              <span class="mono date">{{ shortDate(pair.line_date) }}</span>
+              <span
+                class="amount mono"
+                :class="{ negative: Number(pair.amount) < 0, positive: Number(pair.amount) > 0 }"
+              >{{ fmt(pair.amount, view.statement.currency) }}</span>
+            </div>
+            <p class="rc-desc">{{ pair.description }}</p>
+            <span class="method-tag" :class="`method-${pair.match_method || 'auto'}`">
+              {{ pair.match_method || "auto" }}
+            </span>
+          </div>
+
+          <div class="rc-link-arrow">↔</div>
+
+          <div class="rc-gl side-gl" v-if="pair.matched_txn">
+            <div class="rc-line-head">
+              <span class="mono date">{{ shortDate(pair.matched_txn.date) }}</span>
+              <span class="amount mono">{{ fmt(pair.matched_txn.amount, pair.matched_txn.currency) }}</span>
+            </div>
+            <p class="rc-desc">
+              <strong>{{ pair.matched_txn.vendor || "—" }}</strong>
+              <span v-if="pair.matched_txn.category"> · {{ pair.matched_txn.category }}</span>
+            </p>
+            <p class="rc-sub mono">{{ pair.matched_txn.id }}</p>
+          </div>
+          <div v-else class="rc-gl side-gl missing">
+            <p class="rc-desc">Linked txn {{ pair.matched_txn_id }} not found.</p>
+          </div>
+
+          <button
+            class="rc-unmatch ghost"
+            :disabled="busyLineIds.has(pair.id)"
+            @click="unmatch(pair.id)"
+            title="Break the link between this line and the GL row"
+          >Unmatch</button>
+        </div>
+      </div>
+    </section>
+
+    <!-- Unmatched debit lines (matchable, awaiting user action) -->
+    <section v-if="view.unmatched_debits.length > 0" class="rc-section">
+      <h4 class="rc-section-title">
+        Unmatched statement lines ({{ view.unmatched_debits.length }})
+      </h4>
+      <div class="rc-line-list">
+        <div
+          v-for="line in view.unmatched_debits"
+          :key="line.id"
+          class="rc-unmatched"
+          :class="{ busy: busyLineIds.has(line.id) }"
+        >
+          <div class="rc-line side-line">
+            <div class="rc-line-head">
+              <span class="mono date">{{ shortDate(line.line_date) }}</span>
+              <span class="amount mono negative">{{ fmt(line.amount, view.statement.currency) }}</span>
+            </div>
+            <p class="rc-desc">{{ line.description }}</p>
+          </div>
+
+          <div v-if="pickingForLineId === line.id" class="rc-picker">
+            <p class="rc-picker-title">Match to which GL row?</p>
+            <div
+              v-if="view.unreconciled_gl.length === 0"
+              class="rc-picker-empty"
+            >No unreconciled GL rows in this source/period.</div>
+            <ul v-else class="rc-picker-list">
+              <li
+                v-for="g in candidatesForLine(line)"
+                :key="g.id"
+                class="rc-picker-item"
+                :class="{ exact: g._amount_diff <= 0.01 }"
+              >
+                <button
+                  class="rc-picker-btn"
+                  :disabled="busyLineIds.has(line.id)"
+                  @click="manualMatch(line.id, g.id)"
+                >
+                  <span class="mono">{{ shortDate(g.date) }}</span>
+                  <strong>{{ g.vendor || "—" }}</strong>
+                  <span class="mono">{{ fmt(g.amount, g.currency) }}</span>
+                  <span v-if="g._amount_diff <= 0.01" class="exact-tag">exact</span>
+                </button>
+              </li>
+            </ul>
+            <button class="ghost" @click="pickingForLineId = null">Cancel</button>
+          </div>
+          <button
+            v-else
+            class="rc-match-btn primary"
+            :disabled="busyLineIds.has(line.id)"
+            @click="pickingForLineId = line.id"
+          >Match…</button>
+        </div>
+      </div>
+    </section>
+
+    <!-- Unmatched credits (no income side yet — informational) -->
+    <section v-if="view.unmatched_credits.length > 0" class="rc-section">
+      <h4 class="rc-section-title muted">
+        Deposits / credits ({{ view.unmatched_credits.length }})
+        <span class="hint">— income side of the books isn't built yet, so these can't auto-match</span>
+      </h4>
+      <div class="rc-line-list">
+        <div
+          v-for="line in view.unmatched_credits"
+          :key="line.id"
+          class="rc-credit"
+        >
+          <span class="mono date">{{ shortDate(line.line_date) }}</span>
+          <span class="amount mono positive">{{ fmt(line.amount, view.statement.currency) }}</span>
+          <span class="rc-desc">{{ line.description }}</span>
+        </div>
+      </div>
+    </section>
+
+    <!-- Unreconciled GL (in source+period, not pointed at by any line) -->
+    <section v-if="view.unreconciled_gl.length > 0" class="rc-section">
+      <h4 class="rc-section-title">
+        GL rows with no matching statement line ({{ view.unreconciled_gl.length }})
+        <span class="hint">— recorded in your books but not on this statement</span>
+      </h4>
+      <div class="rc-gl-list">
+        <div
+          v-for="g in view.unreconciled_gl"
+          :key="g.id"
+          class="rc-gl-row"
+        >
+          <span class="mono date">{{ shortDate(g.date) }}</span>
+          <strong>{{ g.vendor || "—" }}</strong>
+          <span class="rc-desc">{{ g.category || "—" }}</span>
+          <span class="amount mono">{{ fmt(g.amount, g.currency) }}</span>
+          <span class="mono rc-sub">{{ g.id }}</span>
+        </div>
+      </div>
+    </section>
+
+    <div
+      v-if="view.matched.length === 0 && view.unmatched_debits.length === 0 && view.unmatched_credits.length === 0 && view.unreconciled_gl.length === 0"
+      class="rc-empty"
+    >Nothing to show — no statement lines and no GL rows in this source/period.</div>
+  </div>
+</template>
+
+<style scoped>
+.rc-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 0.9rem;
+}
+
+.rc-empty {
+  color: var(--text-muted);
+  font-size: 0.9rem;
+  padding: 1rem 0;
+}
+
+/* ── Header ─────────────────────────────────────────────────────────── */
+.rc-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  padding-bottom: 0.5rem;
+  border-bottom: 1px solid var(--border);
+}
+
+.rc-source {
+  margin: 0;
+  font-size: 1.05rem;
+  font-weight: 600;
+}
+
+.rc-period {
+  margin: 0.2rem 0 0;
+  font-size: 0.78rem;
+  color: var(--text-muted);
+}
+
+.rc-head-stats {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+}
+
+.status-pill {
+  display: inline-block;
+  padding: 1px 8px;
+  border-radius: 10px;
+  font-size: 0.65rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  font-family: var(--font-mono);
+}
+
+.status-pill.status-imported {
+  background: #eff6ff;
+  color: #1d4ed8;
+  border: 1px solid #bfdbfe;
+}
+
+.status-pill.status-partially_reconciled {
+  background: #fffbeb;
+  color: #b45309;
+  border: 1px solid #fde68a;
+}
+
+.status-pill.status-reconciled {
+  background: #f0fdf4;
+  color: var(--ok);
+  border: 1px solid #bbf7d0;
+}
+
+.status-pill.status-needs_attention {
+  background: #fef2f2;
+  color: var(--danger);
+  border: 1px solid #fecaca;
+}
+
+.count-chip {
+  font-size: 0.7rem;
+  font-family: var(--font-mono);
+  padding: 1px 7px;
+  border-radius: 3px;
+  background: #f0f0eb;
+  color: var(--text-muted);
+}
+
+.count-chip.warn {
+  background: #fffbeb;
+  color: #b45309;
+}
+
+.count-chip.muted {
+  background: #f0f0eb;
+  color: var(--text-muted);
+}
+
+.count-chip.info {
+  background: #eff6ff;
+  color: #1d4ed8;
+}
+
+.rc-balances {
+  margin: 0;
+  font-size: 0.75rem;
+  color: var(--text-muted);
+}
+
+.rc-error {
+  margin: 0;
+  font-size: 0.8rem;
+  color: var(--danger);
+  padding: 0.4rem 0.55rem;
+  background: #fef2f2;
+  border: 1px solid #fca5a5;
+  border-radius: 4px;
+}
+
+.rc-diagnostic {
+  font-size: 0.8rem;
+  color: #92400e;
+  background: #fffbeb;
+  border: 1px solid #fde68a;
+  border-radius: var(--radius);
+  padding: 0.65rem 0.85rem;
+  line-height: 1.5;
+}
+
+.rc-diagnostic ul {
+  margin: 0.35rem 0;
+  padding-left: 1.25rem;
+}
+
+.rc-diagnostic code {
+  font-family: var(--font-mono);
+  font-size: 0.78rem;
+}
+
+/* ── Sections ──────────────────────────────────────────────────────── */
+.rc-section {
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+}
+
+.rc-section-title {
+  margin: 0;
+  font-size: 0.7rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text);
+}
+
+.rc-section-title.muted {
+  color: var(--text-muted);
+}
+
+.rc-section-title .hint {
+  font-size: 0.7rem;
+  font-weight: 400;
+  text-transform: none;
+  letter-spacing: 0;
+  color: var(--text-muted);
+  font-style: italic;
+  margin-left: 0.4rem;
+}
+
+/* ── Matched pairs ─────────────────────────────────────────────────── */
+.rc-pair-list,
+.rc-line-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+
+.rc-pair {
+  display: grid;
+  grid-template-columns: 1fr 32px 1fr auto;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.5rem 0.6rem;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+
+.rc-pair.busy {
+  opacity: 0.6;
+  pointer-events: none;
+}
+
+.rc-line,
+.rc-gl {
+  font-size: 0.78rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  min-width: 0;
+}
+
+.side-line {
+  background: #fffbeb;
+  border-radius: 4px;
+  padding: 0.35rem 0.5rem;
+}
+
+.side-gl {
+  background: #eff6ff;
+  border-radius: 4px;
+  padding: 0.35rem 0.5rem;
+}
+
+.side-gl.missing {
+  background: #fef2f2;
+  color: var(--danger);
+}
+
+.rc-line-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+
+.rc-line-head .date {
+  font-size: 0.72rem;
+  color: var(--text-muted);
+}
+
+.rc-line-head .amount {
+  font-weight: 600;
+  font-size: 0.85rem;
+}
+
+.amount.negative {
+  color: var(--danger);
+}
+
+.amount.positive {
+  color: var(--ok);
+}
+
+.rc-desc {
+  margin: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-size: 0.78rem;
+}
+
+.rc-sub {
+  font-size: 0.65rem;
+  color: var(--text-muted);
+}
+
+.method-tag {
+  font-size: 0.6rem;
+  font-family: var(--font-mono);
+  font-weight: 600;
+  text-transform: uppercase;
+  background: #f0f0eb;
+  color: var(--text-muted);
+  padding: 1px 6px;
+  border-radius: 3px;
+  align-self: flex-start;
+}
+
+.method-tag.method-manual {
+  background: #eff6ff;
+  color: #1d4ed8;
+}
+
+.rc-link-arrow {
+  font-size: 0.95rem;
+  color: var(--text-muted);
+  text-align: center;
+}
+
+.rc-unmatch {
+  font-size: 0.7rem;
+  padding: 0.25rem 0.55rem;
+}
+
+/* ── Unmatched lines ───────────────────────────────────────────────── */
+.rc-unmatched {
+  display: flex;
+  align-items: stretch;
+  gap: 0.5rem;
+  padding: 0.5rem 0.6rem;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  flex-wrap: wrap;
+}
+
+.rc-unmatched .rc-line {
+  flex: 1 1 240px;
+}
+
+.rc-unmatched.busy {
+  opacity: 0.6;
+  pointer-events: none;
+}
+
+.rc-match-btn {
+  padding: 0.3rem 0.7rem;
+  font-size: 0.78rem;
+  align-self: center;
+}
+
+.rc-picker {
+  flex: 1 1 100%;
+  background: #fafaf5;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 0.5rem 0.6rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+
+.rc-picker-title {
+  margin: 0;
+  font-size: 0.72rem;
+  color: var(--text-muted);
+  font-weight: 600;
+}
+
+.rc-picker-empty {
+  font-size: 0.78rem;
+  color: var(--text-muted);
+  font-style: italic;
+}
+
+.rc-picker-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  max-height: 220px;
+  overflow-y: auto;
+}
+
+.rc-picker-btn {
+  display: grid;
+  grid-template-columns: 90px 1fr 110px auto;
+  align-items: baseline;
+  gap: 0.5rem;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 0.3rem 0.55rem;
+  cursor: pointer;
+  text-align: left;
+  font-size: 0.78rem;
+  width: 100%;
+}
+
+.rc-picker-btn:hover:not(:disabled) {
+  border-color: var(--accent);
+  background: #fafaf5;
+}
+
+.rc-picker-item.exact .rc-picker-btn {
+  border-color: #bbf7d0;
+}
+
+.exact-tag {
+  font-size: 0.6rem;
+  font-family: var(--font-mono);
+  font-weight: 600;
+  color: var(--ok);
+  background: #f0fdf4;
+  padding: 1px 5px;
+  border-radius: 3px;
+  text-transform: uppercase;
+}
+
+/* ── Unmatched credits ─────────────────────────────────────────────── */
+.rc-credit {
+  display: grid;
+  grid-template-columns: 90px 110px 1fr;
+  align-items: baseline;
+  gap: 0.5rem;
+  padding: 0.4rem 0.6rem;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  font-size: 0.78rem;
+}
+
+/* ── Unreconciled GL ──────────────────────────────────────────────── */
+.rc-gl-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+}
+
+.rc-gl-row {
+  display: grid;
+  grid-template-columns: 90px 160px 1fr 110px 110px;
+  align-items: baseline;
+  gap: 0.5rem;
+  padding: 0.4rem 0.6rem;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  font-size: 0.78rem;
+}
+
+.rc-gl-row .rc-desc {
+  font-style: italic;
+  color: var(--text-muted);
+}
+
+.mono {
+  font-family: var(--font-mono);
+}
+
+.date {
+  font-family: var(--font-mono);
+  color: var(--text-muted);
+}
+
+button.primary {
+  font-size: 0.8rem;
+  padding: 0.35rem 0.85rem;
+}
+
+button.ghost {
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--text);
+  font-size: 0.78rem;
+  padding: 0.3rem 0.65rem;
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+button.ghost:hover:not(:disabled) {
+  background: #f5f5f0;
+}
+
+button:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+@media (max-width: 720px) {
+  .rc-pair {
+    grid-template-columns: 1fr;
+  }
+  .rc-link-arrow {
+    transform: rotate(90deg);
+  }
+  .rc-gl-row {
+    grid-template-columns: 1fr;
+  }
+}
+</style>

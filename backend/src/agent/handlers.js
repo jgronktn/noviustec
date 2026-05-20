@@ -16,6 +16,11 @@ import {
   listStatementLines,
   getLedgerPath,
 } from "../ledger/index.js";
+import {
+  autoMatchStatement,
+  buildReconciliationView,
+  findStatementBySource,
+} from "../reconciliation/index.js";
 
 function isoDate(v) {
   if (v == null) return null;
@@ -708,6 +713,54 @@ export async function runTool(name, input) {
         count: files.length,
         truncated: docTruncated,
         counts,
+      };
+    }
+
+    case "show_reconciliation": {
+      // Resolve the statement: explicit id wins; otherwise pick by source
+      // hint; otherwise just the most recent statement on file.
+      let statementId = args.statement_id ?? null;
+      if (!statementId) {
+        const candidate = await findStatementBySource(args.source ?? null);
+        statementId = candidate?.id ?? null;
+      }
+      if (!statementId) {
+        return {
+          __panel: {
+            kind: "reconciliation",
+            title: "Reconciliation",
+            props: {
+              error: "No statement found to reconcile. Upload a bank or card statement first.",
+              statement: null,
+              counts: null,
+              matched: [],
+              unmatched_debits: [],
+              unmatched_credits: [],
+              unreconciled_gl: [],
+              source_diagnostic: null,
+            },
+          },
+          matched: 0,
+        };
+      }
+
+      // Run auto-match first (idempotent — no-ops if nothing matchable),
+      // then build the view from the freshly-persisted state.
+      const matchResult = await autoMatchStatement(statementId);
+      const view = await buildReconciliationView(statementId);
+
+      return {
+        __panel: {
+          kind: "reconciliation",
+          title: view?.statement?.source
+            ? `Reconciliation · ${view.statement.source}`
+            : "Reconciliation",
+          props: view,
+        },
+        statement_id: statementId,
+        auto_matched_now: matchResult.matched,
+        attempted: matchResult.attempted,
+        counts: view?.counts ?? null,
       };
     }
 

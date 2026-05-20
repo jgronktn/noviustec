@@ -88,6 +88,39 @@ export const updateTransaction = (token, id, body) =>
 export const updateAwaiting = (token, id, body) =>
   request(token, "PATCH", `/api/awaiting/${encodeURIComponent(id)}`, body);
 
+/** Fetch the reconciliation view for a statement (panel payload). */
+export const fetchReconciliation = (token, statementId) =>
+  request(
+    token,
+    "GET",
+    `/api/statements/${encodeURIComponent(statementId)}/reconciliation`,
+  );
+
+/** Trigger the auto-match heuristic against a statement. Returns counts. */
+export const reconcileStatement = (token, statementId) =>
+  request(
+    token,
+    "POST",
+    `/api/statements/${encodeURIComponent(statementId)}/reconcile`,
+  );
+
+/** Manually pair a statement line with a GL transaction. */
+export const matchStatementLine = (token, lineId, txnId) =>
+  request(
+    token,
+    "POST",
+    `/api/statement-lines/${encodeURIComponent(lineId)}/match`,
+    { txn_id: txnId },
+  );
+
+/** Clear an existing match on a statement line. */
+export const unmatchStatementLine = (token, lineId) =>
+  request(
+    token,
+    "POST",
+    `/api/statement-lines/${encodeURIComponent(lineId)}/unmatch`,
+  );
+
 /**
  * Record a manual payment against an outstanding AwaitingPayment row.
  * No receipt document required — for checks, credit-card charges with

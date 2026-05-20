@@ -296,6 +296,26 @@ export const TOOL_DEFINITIONS = [
     },
   },
   {
+    name: "show_reconciliation",
+    description:
+      "Auto-match a bank/credit-card statement's lines against GL transactions, then render the reconciliation view: matched pairs, unmatched statement lines (split into debits the user still needs to resolve and credits we can't match without an income side), and GL rows in the same payment-source/period that nothing matched against. Use when the user asks to reconcile, match a statement, or wants to know why their statement and books disagree. Source-name diagnostic surfaces the most common cause of misses (statement source like 'Business Advantage Fundamentals™ Banking ••9934' vs GL payment_source like 'BoA Business Checking').",
+    input_schema: {
+      type: "object",
+      properties: {
+        statement_id: {
+          type: "string",
+          description:
+            "Statement id (stmt_xxxxxxxx) — get it from show_statements_list if the user hasn't told you. If omitted, the most recent statement is used; pass source as a hint when the user names a specific bank.",
+        },
+        source: {
+          type: "string",
+          description:
+            "Vendor/bank name fragment — used to pick the most recent statement when statement_id isn't known.",
+        },
+      },
+    },
+  },
+  {
     name: "show_statements_list",
     description:
       "Render a table of imported bank and credit-card statements (from the Statements sheet — NOT the document archive). Each row shows the statement's source account, period, line count, opening/closing balances, and totals, with a Download button to grab the original PDF. Use this when the user asks to see bank statements, credit-card statements, or 'statements I uploaded'. Filter by status or by source.",
