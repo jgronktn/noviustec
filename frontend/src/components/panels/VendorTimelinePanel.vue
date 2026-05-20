@@ -104,9 +104,11 @@ async function handleCardClick(ev) {
   }
 
   if (ev.source === "gl") {
-    // Left-side GL doc card (paid receipt / confirmation / etc.) — strip
-    // the "-doc" suffix to get the underlying GL row id.
-    const txnId = ev.id.replace(/-doc$/, "");
+    // Left-side GL doc card. The backend now sends txn_id explicitly when
+    // emitting one card per Documents row; older event shape (fallback
+    // path with no doc rows) uses an id of `${txn}-doc`, so strip if
+    // needed.
+    const txnId = ev.txn_id ?? ev.id.replace(/-doc$/, "");
     await openEditDialog({ kind: "transaction", id: txnId });
     return;
   }

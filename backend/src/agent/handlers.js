@@ -162,6 +162,23 @@ export async function buildTimelineProps({ vendor = null, from, to } = {}) {
 
   const awaitingAll = await listAwaiting({ status: "all" });
   const txnAll = await listTransactions({ from, to });
+  // Pre-fetch every Documents row so the timeline can render one left-side
+  // card per archived doc instead of just one per GL row. Anthropic emails
+  // ship an invoice PDF and a receipt PDF together — both belong on the
+  // timeline as separate events tied to the same payment.
+  const docsAll = await listDocuments();
+  // Group docs by their GL transaction id. Skip docs that are ALSO tied to
+  // an AwaitingPayment row: those already get a left card from the awaiting
+  // side (drawn on the invoice's date, not the payment date), and we don't
+  // want to double-show the same doc on the GL date too.
+  const docsByTxn = new Map();
+  for (const d of docsAll) {
+    if (!d.txn_id) continue;
+    if (d.awaiting_id) continue;
+    if (!d.reference_kind) continue;
+    if (!docsByTxn.has(d.txn_id)) docsByTxn.set(d.txn_id, []);
+    docsByTxn.get(d.txn_id).push(d);
+  }
 
   const matchedAwaiting = vendor
     ? awaitingAll.filter((r) => vendorMatches(r.vendor, vendor))
@@ -223,24 +240,52 @@ export async function buildTimelineProps({ vendor = null, from, to } = {}) {
     });
   }
 
-  // Every GL row with a reference_kind contributes a left-side document
-  // card — not just invoice/receipt. A "confirmation" (bank Payment
-  // Details), a "transaction" (credit-card statement line, check #), an
-  // "order" or "other" each represents a source doc that justifies the
-  // payment. Without this, a payment whose source doc isn't an invoice
-  // (e.g. Schmeiser's confirmation) shows up on the right with no
-  // counterpart on the left, and totals look mysteriously off by that
-  // amount. Dedupe still excludes GL cards whose txn already shows up as
-  // the paid_txn for an AwaitingPayment row (no double-count).
+  // Left-side cards from the GL side. If the GL row has Documents rows
+  // attached (parser-archived PDFs/images), emit ONE left card per doc —
+  // so an Anthropic email shipping both an Invoice-XXX.pdf and a
+  // Receipt-YYY.pdf renders as two left cards next to one payment card,
+  // each tagged with its own reference_kind + reference_number. Fall back
+  // to a synthetic card built from the GL row itself when no Documents
+  // rows are attached (Record-payment flow with no archived PDF, etc.).
   for (const r of matchedTxns) {
-    const k = r.reference_kind;
-    if (!k) continue; // no reference → no left card
     const date = isoDate(r.date);
+    const amount = Math.round(Number(r.amount) * 100) / 100;
+    const docs = docsByTxn.get(r.id) ?? [];
+
+    if (docs.length > 0) {
+      for (const d of docs) {
+        leftEvents.push({
+          id: d.id, // Documents row ids are unique across the sheet
+          txn_id: r.id, // for dedupe + click → edit-transaction routing
+          doc_id: d.id,
+          kind: d.reference_kind,
+          date,
+          amount,
+          currency: r.currency ?? "USD",
+          reference_number: d.reference_number ?? null,
+          status: "paid",
+          days_outstanding: null,
+          paid_at: date,
+          paid_txn_id: r.id,
+          link_id: r.id,
+          description: r.description ?? "",
+          vendor: r.vendor,
+          source: "gl",
+        });
+      }
+      continue;
+    }
+
+    // Fallback: no doc rows for this txn (Record-payment with no source
+    // PDF, or an old GL row archived before the Documents sheet existed).
+    // Skip if the GL row itself has no reference_kind — nothing to show.
+    if (!r.reference_kind) continue;
     leftEvents.push({
       id: `${r.id}-doc`,
-      kind: k,
+      txn_id: r.id,
+      kind: r.reference_kind,
       date,
-      amount: Math.round(Number(r.amount) * 100) / 100,
+      amount,
       currency: r.currency ?? "USD",
       reference_number: r.reference_number ?? null,
       status: "paid",
@@ -285,24 +330,36 @@ export async function buildTimelineProps({ vendor = null, from, to } = {}) {
     .filter((e) => e.source === "awaiting")
     .reduce((s, e) => s + e.amount, 0);
   const totalPaid = rightEvents.reduce((s, e) => s + e.amount, 0);
-  // For matched flows we render BOTH an Invoice card (from AwaitingPayment)
-  // and a Receipt card (from the GL row that paid it). They show distinct
-  // real events on different dates, but the money is one transaction —
-  // counting both would inflate the side total. So total_left skips a
-  // GL-sourced left card whenever its txn already shows up as the payment
-  // for an AwaitingPayment row.
+  // Totals dedupe across overlapping representations of the same money:
+  //   - Awaiting card always counts (one per AwaitingPayment row).
+  //   - GL doc cards on a txn that paid an awaiting → skipped (the
+  //     awaiting card already covers that money).
+  //   - GL doc cards on an unpaid-via-awaiting txn → count the GL row's
+  //     amount ONCE per txn, regardless of how many doc cards we drew
+  //     for it (Anthropic ships invoice + receipt = 2 cards, 1 txn).
   const paidTxnIds = new Set(
     matchedAwaiting
       .filter((r) => r.paid_txn_id)
       .map((r) => r.paid_txn_id),
   );
-  const totalLeft = leftEvents.reduce((sum, e) => {
-    if (e.source === "gl") {
-      const baseId = e.id.replace(/-doc$/, "");
-      if (paidTxnIds.has(baseId)) return sum; // dedupe — invoice already counted
+  const totalLeft = (() => {
+    let total = 0;
+    const countedTxns = new Set();
+    for (const e of leftEvents) {
+      if (e.source === "awaiting") {
+        total += e.amount;
+        continue;
+      }
+      // e.source === "gl"
+      const txnId = e.txn_id ?? e.id.replace(/-doc$/, "");
+      if (!txnId) continue;
+      if (paidTxnIds.has(txnId)) continue; // awaiting already counted this money
+      if (countedTxns.has(txnId)) continue; // already counted from a sibling doc card
+      countedTxns.add(txnId);
+      total += e.amount;
     }
-    return sum + e.amount;
-  }, 0);
+    return total;
+  })();
   const totalRight = totalPaid;
   const outstandingInvoices = leftEvents
     .filter(
