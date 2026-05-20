@@ -563,6 +563,15 @@ export async function runTool(name, input) {
         },
         count: entries.length,
         total_outstanding: Math.round(total_outstanding * 100) / 100,
+        entries: entries.slice(0, 50).map((e) => ({
+          id: e.id,
+          vendor: e.vendor,
+          date: e.date,
+          amount: e.amount,
+          currency: e.currency,
+          reference_number: e.reference_number,
+          days_outstanding: e.days_outstanding,
+        })),
       };
     }
 
@@ -718,6 +727,15 @@ export async function runTool(name, input) {
         count: files.length,
         truncated: docTruncated,
         counts,
+        files: files.slice(0, 50).map((f) => ({
+          id: f.id,
+          kind: f.kind,
+          vendor: f.vendor,
+          date: f.date,
+          reference_number: f.reference_number,
+          filename: f.filename,
+          txn_id: f.txn_id,
+        })),
       };
     }
 
@@ -929,6 +947,22 @@ export async function runTool(name, input) {
         args.title ??
         (filterDesc ? `Statements · ${filterDesc}` : "Statements");
 
+      // Slim per-statement summary returned to the AGENT (NOT the panel,
+      // which already has the full entries). Without this the agent can
+      // see how many statements exist but not their ids, so follow-up
+      // calls like read_statement / show_reconciliation have nothing to
+      // reference. Keep this trim — id + the fields the agent needs to
+      // disambiguate the user's reference.
+      const agentEntries = entries.slice(0, 50).map((e) => ({
+        id: e.id,
+        source: e.source,
+        statement_date: e.statement_date,
+        period_start: e.period_start,
+        period_end: e.period_end,
+        status: e.status,
+        line_count: e.line_count,
+      }));
+
       return {
         __panel: {
           kind: "statements_list",
@@ -942,6 +976,7 @@ export async function runTool(name, input) {
         },
         count: entries.length,
         counts,
+        entries: agentEntries,
       };
     }
 
@@ -996,6 +1031,18 @@ export async function runTool(name, input) {
       const title =
         args.title ??
         (status === "all" ? "Inbox · all items" : `Inbox · ${status}`);
+      // Slim entries so the agent can reference specific pending rows by id.
+      const agentEntries = view.slice(0, 50).map((r) => ({
+        id: r.id,
+        status: r.status,
+        vendor: r.vendor,
+        date: r.date,
+        total: r.total,
+        currency: r.currency,
+        reference_number: r.reference_number,
+        suggested_category: r.suggested_category,
+        source_kind: r.source_kind,
+      }));
       return {
         __panel: {
           kind: "inbox_list",
@@ -1013,6 +1060,7 @@ export async function runTool(name, input) {
         shown: view.length,
         truncated,
         counts,
+        entries: agentEntries,
       };
     }
 
@@ -1072,6 +1120,13 @@ export async function runTool(name, input) {
         total_expense: props.total_expense,
         truncated,
         top_vendor: vendors[0]?.vendor ?? null,
+        // Full vendor breakdown for agent reasoning — small payload
+        // even for large vendor counts (vendor + total + count only).
+        vendors: vendors.slice(0, 50).map((v) => ({
+          vendor: v.vendor,
+          total: v.total,
+          count: v.count,
+        })),
       };
     }
 

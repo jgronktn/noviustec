@@ -342,25 +342,28 @@ export async function buildReconciliationView(statementId) {
 }
 
 /**
- * Quick helper for the agent tool — pick the most recent statement
- * (by statement_date) when the agent only knows a source or vendor.
+ * Quick helper for the agent tool — pick a single statement when the
+ * agent doesn't have an explicit statement_id. With a query, prefer a
+ * source substring match; if nothing matches, fall back to the most
+ * recent statement so the panel can still render something useful
+ * (the empty-result panel was confusing — looked like no statements
+ * existed at all).
  */
 export async function findStatementBySource(query) {
   const all = await listStatements({ status: "all" });
-  if (!query) {
-    return [...all].sort((a, b) =>
-      (toIsoDate(b.statement_date) ?? "").localeCompare(
-        toIsoDate(a.statement_date) ?? "",
-      ),
-    )[0];
-  }
-  const q = String(query).toLowerCase();
-  const matches = all.filter(
-    (s) => s.source && s.source.toLowerCase().includes(q),
-  );
-  return [...matches].sort((a, b) =>
+  if (all.length === 0) return null;
+  const sortedByDateDesc = [...all].sort((a, b) =>
     (toIsoDate(b.statement_date) ?? "").localeCompare(
       toIsoDate(a.statement_date) ?? "",
     ),
-  )[0];
+  );
+  if (!query) return sortedByDateDesc[0];
+  const q = String(query).toLowerCase();
+  const matches = sortedByDateDesc.filter(
+    (s) => s.source && s.source.toLowerCase().includes(q),
+  );
+  if (matches.length > 0) return matches[0];
+  // Query didn't match anything — better to show the most recent
+  // statement than nothing at all. Caller can decide what to do.
+  return sortedByDateDesc[0];
 }
