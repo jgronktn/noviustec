@@ -33,6 +33,7 @@ export async function addAwaitingPayment(params) {
   const row = {
     id,
     status: "awaiting",
+    payment_kind: params.payment_kind ?? "expense", // "expense" | "transfer"
     vendor: params.vendor,
     date:
       typeof params.date === "string"
@@ -47,9 +48,11 @@ export async function addAwaitingPayment(params) {
     document_path: params.document_path ?? null,
     source_file: params.source_file ?? null,
     pending_id: params.pending_id ?? null,
+    statement_id: params.statement_id ?? null,
     created_at: new Date().toISOString(),
     paid_at: null,
     paid_txn_id: null,
+    paid_transfer_id: null,
   };
   await withWorkbookWrite(async (wb) => {
     const sheet = wb.getWorksheet(SHEETS.AWAITING);
@@ -72,10 +75,20 @@ export async function getAwaiting(id) {
 }
 
 /**
- * Mark an awaiting row as paid. Called from the approve endpoint when
- * the user matches a receipt to an existing AwaitingPayment row.
+ * Mark an awaiting row as paid. Accepts EITHER paid_txn_id (expense
+ * settlement, creates a GL row first) OR paid_transfer_id (transfer
+ * settlement, e.g. a card balance paid by moving money between your
+ * own accounts). Both fields are persisted; callers supply one.
  */
-export async function markAwaitingPaid(id, { paid_txn_id }) {
+export async function markAwaitingPaid(
+  id,
+  { paid_txn_id, paid_transfer_id } = {},
+) {
+  if (!paid_txn_id && !paid_transfer_id) {
+    throw new Error(
+      "markAwaitingPaid requires either paid_txn_id or paid_transfer_id",
+    );
+  }
   return withWorkbookWrite(async (wb) => {
     const sheet = wb.getWorksheet(SHEETS.AWAITING);
     let target = null;
@@ -86,9 +99,39 @@ export async function markAwaitingPaid(id, { paid_txn_id }) {
     if (!target) throw new Error(`AwaitingPayment row not found: ${id}`);
     target.getCell("status").value = "paid";
     target.getCell("paid_at").value = new Date().toISOString();
-    target.getCell("paid_txn_id").value = paid_txn_id;
+    if (paid_txn_id) target.getCell("paid_txn_id").value = paid_txn_id;
+    if (paid_transfer_id)
+      target.getCell("paid_transfer_id").value = paid_transfer_id;
     target.commit();
-    return { id, paid_txn_id };
+    return { id, paid_txn_id: paid_txn_id ?? null, paid_transfer_id: paid_transfer_id ?? null };
+  });
+}
+
+/**
+ * Mark an awaiting row as written-off. Used during the
+ * card-balance carry-forward — when a new statement supersedes a
+ * still-outstanding awaiting-transfer for the same card, the old one
+ * gets written off with a note pointing at the new statement so the
+ * audit trail is intact.
+ */
+export async function markAwaitingWrittenOff(id, { note } = {}) {
+  return withWorkbookWrite(async (wb) => {
+    const sheet = wb.getWorksheet(SHEETS.AWAITING);
+    let target = null;
+    sheet.eachRow({ includeEmpty: false }, (row, rowNumber) => {
+      if (rowNumber === 1) return;
+      if (row.getCell("id").value === id) target = row;
+    });
+    if (!target) throw new Error(`AwaitingPayment row not found: ${id}`);
+    target.getCell("status").value = "written_off";
+    if (note) {
+      const existing = target.getCell("notes").value ?? "";
+      target.getCell("notes").value = existing
+        ? `${existing} | ${note}`
+        : note;
+    }
+    target.commit();
+    return { id };
   });
 }
 

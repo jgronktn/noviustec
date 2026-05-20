@@ -20,6 +20,7 @@ import {
   listStatements,
   listStatementLines,
   listTransactions,
+  listTransfers,
   updateStatementLine,
   updateStatement,
 } from "../ledger/index.js";
@@ -86,67 +87,132 @@ export async function autoMatchStatement(statementId) {
   const allLinesGlobal = await listStatementLines();
   const lines = allLinesGlobal.filter((l) => l.statement_id === statementId);
 
-  // GL rows that are already paired to some line — anywhere, across any
-  // statement — to avoid double-matching one txn to two lines.
+  // GL rows already paired to some line — across any statement — so we
+  // don't double-claim one txn for two lines.
   const txnIdsAlreadyMatched = new Set(
     allLinesGlobal
       .filter((l) => l.matched_txn_id)
       .map((l) => l.matched_txn_id),
   );
-
-  const unmatched = lines.filter((l) => !l.matched_txn_id);
-  const matchableUnmatched = unmatched.filter(
-    (l) => Number(l.amount) < 0, // skip credits — no income side yet
+  // Transfer rows already paired similarly (debit side OR credit side of
+  // a Transfer counts as one usage of that Transfer).
+  const transferIdsAlreadyMatched = new Set(
+    allLinesGlobal
+      .filter((l) => l.matched_transfer_id)
+      .map((l) => l.matched_transfer_id),
   );
 
-  if (matchableUnmatched.length === 0) {
+  // Each line is matchable by GL only if it's a debit (no income side
+  // yet). Lines of either sign are matchable by Transfer — credit-side
+  // line on a card statement should match a Transfer where to_source =
+  // this statement's source.
+  const unmatched = lines.filter(
+    (l) => !l.matched_txn_id && !l.matched_transfer_id,
+  );
+
+  if (unmatched.length === 0) {
     await refreshStatementStatus(statementId, lines);
     return {
       statement_id: statementId,
       matched: 0,
       attempted: 0,
-      skipped_credits: unmatched.filter((l) => Number(l.amount) >= 0).length,
     };
   }
 
-  // Pull GL with a generous padding around the period.
+  // Pull GL + Transfers with a generous padding around the period.
   const periodStart = toIsoDate(stmt.period_start);
   const periodEnd = toIsoDate(stmt.period_end);
   const from = periodStart ? addDays(periodStart, -DATE_WINDOW_DAYS) : undefined;
   const to = periodEnd ? addDays(periodEnd, DATE_WINDOW_DAYS) : undefined;
-  const allGl = await listTransactions({ from, to });
+  const [allGl, allTransfers] = await Promise.all([
+    listTransactions({ from, to }),
+    listTransfers({ from, to }),
+  ]);
 
   const candidateGl = allGl.filter((g) =>
     sourceMatches(stmt.source, g.payment_source),
   );
 
-  const newMatches = [];
-  for (const line of matchableUnmatched) {
+  const newGlMatches = [];
+  const newTransferMatches = [];
+
+  for (const line of unmatched) {
     const lineAmount = Math.abs(Number(line.amount));
-    let best = null; // { txn, daysOff }
-    for (const g of candidateGl) {
-      if (txnIdsAlreadyMatched.has(g.id)) continue;
-      const amountDiff = Math.abs(Number(g.amount) - lineAmount);
-      if (amountDiff > AMOUNT_TOLERANCE) continue;
-      const daysOff = daysBetween(line.line_date, g.date);
-      if (daysOff > DATE_WINDOW_DAYS) continue;
-      if (!best || daysOff < best.daysOff) {
-        best = { txn: g, daysOff };
+    const isDebit = Number(line.amount) < 0;
+
+    // GL match (debits only — no income side yet).
+    let bestGl = null;
+    if (isDebit) {
+      for (const g of candidateGl) {
+        if (txnIdsAlreadyMatched.has(g.id)) continue;
+        const amountDiff = Math.abs(Number(g.amount) - lineAmount);
+        if (amountDiff > AMOUNT_TOLERANCE) continue;
+        const daysOff = daysBetween(line.line_date, g.date);
+        if (daysOff > DATE_WINDOW_DAYS) continue;
+        if (!bestGl || daysOff < bestGl.daysOff) {
+          bestGl = { txn: g, daysOff };
+        }
       }
     }
-    if (best) {
-      newMatches.push({
+
+    // Transfer match — works on EITHER side. A debit line on this
+    // statement should match a Transfer whose FROM source is this
+    // statement's source (money left this account). A credit line
+    // should match a Transfer whose TO source is this statement's
+    // source (money arrived at this account).
+    let bestTransfer = null;
+    for (const t of allTransfers) {
+      if (transferIdsAlreadyMatched.has(t.id)) continue;
+      const sideMatches = isDebit
+        ? sourceMatches(stmt.source, t.from_source)
+        : sourceMatches(stmt.source, t.to_source);
+      if (!sideMatches) continue;
+      const amountDiff = Math.abs(Number(t.amount) - lineAmount);
+      if (amountDiff > AMOUNT_TOLERANCE) continue;
+      const daysOff = daysBetween(line.line_date, t.date);
+      if (daysOff > DATE_WINDOW_DAYS) continue;
+      if (!bestTransfer || daysOff < bestTransfer.daysOff) {
+        bestTransfer = { transfer: t, daysOff };
+      }
+    }
+
+    // Prefer the closer-dated of the two; tie-breaker → GL (more common).
+    if (bestGl && bestTransfer) {
+      if (bestTransfer.daysOff < bestGl.daysOff) {
+        bestGl = null;
+      } else {
+        bestTransfer = null;
+      }
+    }
+
+    if (bestGl) {
+      newGlMatches.push({
         line_id: line.id,
-        txn_id: best.txn.id,
-        days_off: best.daysOff,
+        txn_id: bestGl.txn.id,
+        days_off: bestGl.daysOff,
       });
-      txnIdsAlreadyMatched.add(best.txn.id);
+      txnIdsAlreadyMatched.add(bestGl.txn.id);
+    } else if (bestTransfer) {
+      newTransferMatches.push({
+        line_id: line.id,
+        transfer_id: bestTransfer.transfer.id,
+        days_off: bestTransfer.daysOff,
+      });
+      transferIdsAlreadyMatched.add(bestTransfer.transfer.id);
     }
   }
 
-  for (const m of newMatches) {
+  for (const m of newGlMatches) {
     await updateStatementLine(m.line_id, {
       matched_txn_id: m.txn_id,
+      matched_transfer_id: null,
+      match_method: "auto",
+    });
+  }
+  for (const m of newTransferMatches) {
+    await updateStatementLine(m.line_id, {
+      matched_txn_id: null,
+      matched_transfer_id: m.transfer_id,
       match_method: "auto",
     });
   }
@@ -157,30 +223,42 @@ export async function autoMatchStatement(statementId) {
   );
   await refreshStatementStatus(statementId, linesAfter);
 
+  const totalNew = newGlMatches.length + newTransferMatches.length;
   return {
     statement_id: statementId,
-    matched: newMatches.length,
-    attempted: matchableUnmatched.length,
-    skipped_credits: unmatched.filter((l) => Number(l.amount) >= 0).length,
-    matches: newMatches,
+    matched: totalNew,
+    matched_gl: newGlMatches.length,
+    matched_transfer: newTransferMatches.length,
+    attempted: unmatched.length,
+    gl_matches: newGlMatches,
+    transfer_matches: newTransferMatches,
   };
 }
 
 /**
  * Derive + persist the Statement's reconciliation status from its lines.
- * Status convention:
- *   reconciled              — every NEGATIVE-amount line is matched
- *   partially_reconciled    — some negative lines matched, not all
- *   imported                — no negative lines matched yet
- * Credits (positive amounts) are excluded from the calculus until the
- * income side of the books exists.
+ * Resolution rules:
+ *   - A NEGATIVE-amount line resolves when it has matched_txn_id (booked
+ *     as an expense) OR matched_transfer_id (transfer-out).
+ *   - A POSITIVE-amount line resolves when it has matched_transfer_id
+ *     (transfer-in). Income matching isn't built yet, so a credit with
+ *     no transfer is still considered unresolved — but doesn't count
+ *     against partial status because we'd never resolve it anyway.
+ * Status:
+ *   reconciled            — every negative line resolved AND every
+ *                           positive line either resolved or income-side
+ *                           is N/A (we tolerate unresolved credits for now)
+ *   partially_reconciled  — some negatives resolved, not all
+ *   imported              — no negatives resolved yet
  */
 async function refreshStatementStatus(statementId, lines) {
   const negs = lines.filter((l) => Number(l.amount) < 0);
-  const matched = negs.filter((l) => l.matched_txn_id).length;
+  const negsResolved = negs.filter(
+    (l) => l.matched_txn_id || l.matched_transfer_id,
+  ).length;
   let status = "imported";
-  if (negs.length > 0 && matched === negs.length) status = "reconciled";
-  else if (matched > 0) status = "partially_reconciled";
+  if (negs.length > 0 && negsResolved === negs.length) status = "reconciled";
+  else if (negsResolved > 0) status = "partially_reconciled";
   // Only write if changed — keep churn low.
   const stmt = await getStatement(statementId);
   if (stmt && stmt.status !== status) {
@@ -206,8 +284,22 @@ function scrubLine(line) {
         ? null
         : Math.round(Number(line.balance_after) * 100) / 100,
     matched_txn_id: line.matched_txn_id ?? null,
+    matched_transfer_id: line.matched_transfer_id ?? null,
     match_method: line.match_method ?? null,
     notes: line.notes ?? "",
+  };
+}
+
+function scrubTransferMinimal(t) {
+  return {
+    id: t.id,
+    date: toIsoDate(t.date),
+    amount: t.amount == null ? null : Math.round(Number(t.amount) * 100) / 100,
+    currency: t.currency ?? "USD",
+    from_source: t.from_source ?? null,
+    to_source: t.to_source ?? null,
+    description: t.description ?? "",
+    awaiting_id: t.awaiting_id ?? null,
   };
 }
 
@@ -231,6 +323,7 @@ function scrubStatement(s) {
     id: s.id,
     status: s.status,
     source: s.source,
+    source_kind: s.source_kind ?? null,
     period_start: toIsoDate(s.period_start),
     period_end: toIsoDate(s.period_end),
     statement_date: toIsoDate(s.statement_date),
@@ -264,19 +357,31 @@ export async function buildReconciliationView(statementId) {
     (l) => l.statement_id === statementId,
   );
 
-  // Look at GL rows for the period, with padding.
+  // Look at GL + Transfers for the period, with padding.
   const periodStart = toIsoDate(stmt.period_start);
   const periodEnd = toIsoDate(stmt.period_end);
   const from = periodStart ? addDays(periodStart, -DATE_WINDOW_DAYS) : undefined;
   const to = periodEnd ? addDays(periodEnd, DATE_WINDOW_DAYS) : undefined;
-  const allGl = await listTransactions({ from, to });
+  const [allGl, allTransfers] = await Promise.all([
+    listTransactions({ from, to }),
+    listTransfers({ from, to }),
+  ]);
   const glById = new Map(allGl.map((g) => [g.id, g]));
+  const transferById = new Map(allTransfers.map((t) => [t.id, t]));
   const candidateGl = allGl.filter((g) =>
     sourceMatches(stmt.source, g.payment_source),
+  );
+  const candidateTransfers = allTransfers.filter(
+    (t) =>
+      sourceMatches(stmt.source, t.from_source) ||
+      sourceMatches(stmt.source, t.to_source),
   );
 
   const matchedTxnIds = new Set(
     lines.filter((l) => l.matched_txn_id).map((l) => l.matched_txn_id),
+  );
+  const matchedTransferIds = new Set(
+    lines.filter((l) => l.matched_transfer_id).map((l) => l.matched_transfer_id),
   );
 
   const matched = [];
@@ -288,7 +393,17 @@ export async function buildReconciliationView(statementId) {
       const gl = glById.get(line.matched_txn_id);
       matched.push({
         ...scrubbed,
+        match_kind: "txn",
         matched_txn: gl ? scrubGlMinimal(gl) : null,
+        matched_transfer: null,
+      });
+    } else if (line.matched_transfer_id) {
+      const t = transferById.get(line.matched_transfer_id);
+      matched.push({
+        ...scrubbed,
+        match_kind: "transfer",
+        matched_txn: null,
+        matched_transfer: t ? scrubTransferMinimal(t) : null,
       });
     } else if (Number(line.amount) < 0) {
       unmatchedDebits.push(scrubbed);
@@ -300,6 +415,11 @@ export async function buildReconciliationView(statementId) {
   const unreconciledGl = candidateGl
     .filter((g) => !matchedTxnIds.has(g.id))
     .map(scrubGlMinimal)
+    .sort((a, b) => (b.date ?? "").localeCompare(a.date ?? ""));
+
+  const unreconciledTransfers = candidateTransfers
+    .filter((t) => !matchedTransferIds.has(t.id))
+    .map(scrubTransferMinimal)
     .sort((a, b) => (b.date ?? "").localeCompare(a.date ?? ""));
 
   // Diagnostic: payment_sources we saw on GL rows for this period that
@@ -317,6 +437,27 @@ export async function buildReconciliationView(statementId) {
     .map(([name, count]) => ({ name, count }))
     .sort((a, b) => b.count - a.count);
 
+  // Payments-vs-transfers diagnostic for credit-card statements: the
+  // statement's "Total Payments" should equal the sum of transfer-ins
+  // for this card during the period.
+  let payments_diagnostic = null;
+  if (
+    stmt.source_kind === "credit_card" &&
+    stmt.total_payments != null
+  ) {
+    const transfersInAmount = lines
+      .filter((l) => Number(l.amount) > 0 && l.matched_transfer_id)
+      .reduce((s, l) => s + Math.abs(Number(l.amount)), 0);
+    payments_diagnostic = {
+      statement_total_payments:
+        Math.round(Number(stmt.total_payments) * 100) / 100,
+      matched_transfers_in: Math.round(transfersInAmount * 100) / 100,
+      diff:
+        Math.round((Number(stmt.total_payments) - transfersInAmount) * 100) /
+        100,
+    };
+  }
+
   return {
     statement: scrubStatement(stmt),
     counts: {
@@ -325,11 +466,14 @@ export async function buildReconciliationView(statementId) {
       unmatched_debit: unmatchedDebits.length,
       unmatched_credit: unmatchedCredits.length,
       unreconciled_gl: unreconciledGl.length,
+      unreconciled_transfers: unreconciledTransfers.length,
     },
     matched,
     unmatched_debits: unmatchedDebits,
     unmatched_credits: unmatchedCredits,
     unreconciled_gl: unreconciledGl,
+    unreconciled_transfers: unreconciledTransfers,
+    payments_diagnostic,
     source_diagnostic: {
       statement_source: stmt.source,
       gl_sources_in_period: [...glSourcesSeen.entries()].map(

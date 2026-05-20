@@ -41,6 +41,7 @@ async function recordPayment() {
     currency: original.value.currency,
     reference_number: original.value.reference_number,
     date: toIsoDate(original.value.date),
+    payment_kind: original.value.payment_kind,
   });
 }
 

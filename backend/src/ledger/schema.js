@@ -15,6 +15,7 @@ export const SHEETS = {
   DOCUMENTS: "Documents",
   STATEMENTS: "Statements",
   STATEMENT_LINES: "StatementLines",
+  TRANSFERS: "Transfers",
 };
 
 export const COLUMNS = {
@@ -72,6 +73,11 @@ export const COLUMNS = {
   [SHEETS.AWAITING]: [
     { header: "ID", key: "id", width: 16 },
     { header: "Status", key: "status", width: 14 }, // awaiting | paid | written_off | rejected
+    // "expense" (default; pay-flow creates a GL row) or "transfer"
+    // (pay-flow creates a Transfer row — used for credit-card balances
+    // that get settled by moving money between your own accounts).
+    // Null on legacy rows is treated as "expense".
+    { header: "Payment_Kind", key: "payment_kind", width: 12 },
     { header: "Vendor", key: "vendor", width: 28 },
     { header: "Date", key: "date", width: 12, style: { numFmt: "yyyy-mm-dd" } }, // invoice date
     { header: "Amount", key: "amount", width: 12, style: { numFmt: "#,##0.00" } },
@@ -83,9 +89,11 @@ export const COLUMNS = {
     { header: "Document_Path", key: "document_path", width: 60 },
     { header: "Source_File", key: "source_file", width: 50 },
     { header: "Pending_ID", key: "pending_id", width: 16 },
+    { header: "Statement_ID", key: "statement_id", width: 16 }, // FK when this awaiting was auto-created from a card statement
     { header: "Created_At", key: "created_at", width: 22 },
     { header: "Paid_At", key: "paid_at", width: 22 },
     { header: "Paid_TXN_ID", key: "paid_txn_id", width: 16 },
+    { header: "Paid_Transfer_ID", key: "paid_transfer_id", width: 16 },
   ],
   [SHEETS.DOCUMENTS]: [
     { header: "ID", key: "id", width: 16 },
@@ -105,6 +113,10 @@ export const COLUMNS = {
     { header: "ID", key: "id", width: 16 },
     { header: "Status", key: "status", width: 18 }, // imported | needs_attention | reconciled | partially_reconciled
     { header: "Source", key: "source", width: 32 }, // payment source (Sources sheet name)
+    // "credit_card" | "bank_account" | "cash" | "other" — captured from
+    // the parser. Drives whether we auto-create an awaiting-transfer
+    // for the closing balance on import (credit cards only).
+    { header: "Source_Kind", key: "source_kind", width: 14 },
     { header: "Period_Start", key: "period_start", width: 12, style: { numFmt: "yyyy-mm-dd" } },
     { header: "Period_End", key: "period_end", width: 12, style: { numFmt: "yyyy-mm-dd" } },
     { header: "Statement_Date", key: "statement_date", width: 14, style: { numFmt: "yyyy-mm-dd" } },
@@ -129,9 +141,31 @@ export const COLUMNS = {
     { header: "Amount", key: "amount", width: 12, style: { numFmt: "#,##0.00;(#,##0.00)" } }, // signed
     { header: "Balance_After", key: "balance_after", width: 14, style: { numFmt: "#,##0.00" } },
     { header: "Matched_TXN_ID", key: "matched_txn_id", width: 16 },
+    { header: "Matched_Transfer_ID", key: "matched_transfer_id", width: 16 },
     { header: "Match_Method", key: "match_method", width: 12 }, // auto | manual | null
     { header: "Notes", key: "notes", width: 40 },
     { header: "Created_At", key: "created_at", width: 22 },
+  ],
+  // Inter-account transfers. One row per money movement between two
+  // accounts you control (e.g., paying a credit card from checking).
+  // Distinct from GL because the money never leaves your books — both
+  // sides are your own accounts. P&L tools ignore this sheet entirely.
+  [SHEETS.TRANSFERS]: [
+    { header: "ID", key: "id", width: 16 },
+    { header: "Date", key: "date", width: 12, style: { numFmt: "yyyy-mm-dd" } },
+    { header: "Amount", key: "amount", width: 12, style: { numFmt: "#,##0.00" } },
+    { header: "Currency", key: "currency", width: 8 },
+    { header: "From_Source", key: "from_source", width: 32 },
+    { header: "To_Source", key: "to_source", width: 32 },
+    { header: "Description", key: "description", width: 40 },
+    { header: "Notes", key: "notes", width: 50 },
+    // Linked AwaitingPayment (when this Transfer settled an
+    // awaiting-transfer row, like a card balance).
+    { header: "Awaiting_ID", key: "awaiting_id", width: 16 },
+    { header: "Source_File", key: "source_file", width: 50 },
+    { header: "Pending_ID", key: "pending_id", width: 16 },
+    { header: "Created_At", key: "created_at", width: 22 },
+    { header: "Created_By", key: "created_by", width: 12 }, // user | agent | auto-statement
   ],
 };
 

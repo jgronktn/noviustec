@@ -48,7 +48,11 @@ import {
   listAwaiting,
   getAwaiting,
   markAwaitingPaid,
+  markAwaitingWrittenOff,
   findMatchCandidates,
+  addTransfer,
+  listTransfers,
+  getTransfer,
 } from "../ledger/index.js";
 import { runAgent } from "../agent/loop.js";
 import { buildTimelineProps } from "../agent/handlers.js";
@@ -608,6 +612,97 @@ export default async function apiRoutes(fastify, opts) {
         entries = entries.filter((r) => r.vendor === req.query.vendor);
       }
       return { count: entries.length, entries };
+    },
+  );
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // POST /api/awaiting/:id/pay-transfer — settle an awaiting-transfer
+  // row (e.g. a credit-card balance) by recording a money movement
+  // between two of your own accounts. Creates a Transfer row and marks
+  // the awaiting paid (paid_transfer_id set, status=paid). Validated
+  // against payment_kind="transfer" — refuses to settle an expense
+  // awaiting via this path.
+  // ─────────────────────────────────────────────────────────────────────────
+  fastify.post(
+    "/api/awaiting/:id/pay-transfer",
+    {
+      schema: {
+        body: {
+          type: "object",
+          required: ["date", "from_source"],
+          additionalProperties: false,
+          properties: {
+            date: { type: "string" }, // YYYY-MM-DD, transfer date
+            from_source: { type: "string", minLength: 1 },
+            notes: { type: "string", default: "" },
+            description: { type: "string", default: "" },
+          },
+        },
+      },
+    },
+    async (req, reply) => {
+      const awaiting = await getAwaiting(req.params.id);
+      if (!awaiting) {
+        return reply.code(404).send({ error: "AwaitingPayment row not found" });
+      }
+      if (awaiting.status !== "awaiting") {
+        return reply
+          .code(409)
+          .send({ error: `Cannot pay an awaiting with status=${awaiting.status}` });
+      }
+      // Legacy rows (no payment_kind set) default to "expense". Refuse to
+      // settle them via the transfer path — caller should use /pay.
+      const kind = awaiting.payment_kind || "expense";
+      if (kind !== "transfer") {
+        return reply.code(400).send({
+          error: `Awaiting payment_kind is ${kind}; use /pay for expense settlements`,
+        });
+      }
+
+      // Register the from_source in the Sources sheet on first use.
+      const { name: canonicalFrom } = await ensurePaymentSource(req.body.from_source);
+      // to_source is the awaiting's vendor (the account it's owed against
+      // — for a card balance, that's the card account).
+      const toSource = awaiting.vendor;
+      try {
+        if (toSource) await ensurePaymentSource(toSource);
+      } catch {
+        /* best-effort */
+      }
+
+      const { id: transferId } = await addTransfer({
+        date: req.body.date,
+        amount: awaiting.amount,
+        currency: awaiting.currency ?? "USD",
+        from_source: canonicalFrom || req.body.from_source,
+        to_source: toSource,
+        description:
+          req.body.description ||
+          `Payment of ${awaiting.vendor ?? "card"} balance`,
+        notes: req.body.notes ?? "",
+        awaiting_id: awaiting.id,
+        created_by: "user",
+      });
+
+      await markAwaitingPaid(awaiting.id, { paid_transfer_id: transferId });
+
+      req.log.info(
+        {
+          awaiting_id: awaiting.id,
+          transfer_id: transferId,
+          action: "pay_transfer",
+          from_source: canonicalFrom || req.body.from_source,
+          to_source: toSource,
+          amount: awaiting.amount,
+        },
+        "awaiting-transfer settled",
+      );
+
+      return {
+        awaiting_id: awaiting.id,
+        transfer_id: transferId,
+        action: "pay_transfer",
+      };
     },
   );
 
@@ -1420,6 +1515,7 @@ export default async function apiRoutes(fastify, opts) {
       const stmtId = await addStatement({
         statement: {
           source: canonicalSource,
+          source_kind: ext.source?.kind ?? null,
           period_start: ext.period?.start ?? null,
           period_end: ext.period?.end ?? null,
           statement_date: statementDate,
@@ -1443,12 +1539,77 @@ export default async function apiRoutes(fastify, opts) {
         lines: ext.lines ?? [],
       });
 
+      // ── Auto-create awaiting-transfer for the closing balance ──────────
+      // Credit-card statements model an obligation: you owe the card
+      // issuer the closing balance, and you'll settle it by transferring
+      // money in from another account. The carry-forward rule: any
+      // still-outstanding awaiting-transfer for the same card source
+      // gets written off ("superseded") because the new statement's
+      // closing balance already reflects whatever portion wasn't paid.
+      let awaitingTransferId = null;
+      let supersededAwaitingIds = [];
+      const isCreditCard = ext.source?.kind === "credit_card";
+      const closingBalance = Number(ext.balances?.closing);
+      const shouldCreateAwaiting =
+        isCreditCard &&
+        Number.isFinite(closingBalance) &&
+        closingBalance > 0.01;
+      if (shouldCreateAwaiting) {
+        // Find outstanding awaiting-transfers tied to this card source.
+        try {
+          const priorAwaiting = await listAwaiting({ status: "awaiting" });
+          const sameCard = priorAwaiting.filter(
+            (r) =>
+              r.payment_kind === "transfer" &&
+              r.vendor === canonicalSource,
+          );
+          for (const old of sameCard) {
+            await markAwaitingWrittenOff(old.id, {
+              note: `Superseded by statement ${stmtId.id} — balance carried forward into the new closing balance`,
+            });
+            supersededAwaitingIds.push(old.id);
+          }
+        } catch (err) {
+          req.log.error(
+            { err: err.message },
+            "carry-forward of prior awaiting-transfer failed; continuing",
+          );
+        }
+
+        try {
+          const { id: aid } = await addAwaitingPayment({
+            payment_kind: "transfer",
+            vendor: canonicalSource,
+            date: statementDate,
+            amount: Math.round(closingBalance * 100) / 100,
+            currency: ext.currency ?? "USD",
+            reference_number: stmtId.id,
+            reference_kind: "statement",
+            description: `Card balance for ${ext.period?.start ?? "?"} → ${ext.period?.end ?? "?"}`,
+            notes: supersededAwaitingIds.length
+              ? `Carries forward: ${supersededAwaitingIds.join(", ")}`
+              : "",
+            statement_id: stmtId.id,
+            source_file: sourceFilename,
+          });
+          awaitingTransferId = aid;
+        } catch (err) {
+          req.log.error(
+            { err: err.message },
+            "auto-creating awaiting-transfer for closing balance failed; continuing",
+          );
+        }
+      }
+
       req.log.info(
         {
           statement_id: stmtId.id,
           source: canonicalSource,
+          source_kind: ext.source?.kind ?? null,
           period: { from: ext.period?.start, to: ext.period?.end },
           line_count: ext.lines?.length ?? 0,
+          awaiting_transfer_id: awaitingTransferId,
+          superseded_awaiting_ids: supersededAwaitingIds,
           validation: parseResult.validation,
           usage: parseResult.usage,
         },
@@ -1463,6 +1624,8 @@ export default async function apiRoutes(fastify, opts) {
         balances: ext.balances,
         validation: parseResult.validation,
         document_path: archive?.document_path ?? null,
+        awaiting_transfer_id: awaitingTransferId,
+        superseded_awaiting_ids: supersededAwaitingIds,
         status:
           parseResult.validation?.balance_check === "mismatch"
             ? "needs_attention"

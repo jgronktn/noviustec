@@ -1,12 +1,21 @@
 <script setup>
-import { onMounted, onBeforeUnmount } from "vue";
+import { computed, onMounted, onBeforeUnmount } from "vue";
 import RecordPaymentForm from "./RecordPaymentForm.vue";
+import RecordTransferForm from "./RecordTransferForm.vue";
 
 const props = defineProps({
-  // { id, vendor, amount, currency, reference_number?, date? }
+  // { id, vendor, amount, currency, reference_number?, date?, payment_kind? }
   awaiting: { type: Object, required: true },
 });
 const emit = defineEmits(["success", "cancel"]);
+
+// payment_kind === "transfer" means this awaiting represents a credit-
+// card balance (or other inter-account obligation) that gets settled
+// via a Transfer record, not a GL row. Default is "expense" for
+// backward-compat with awaitings created before the column existed.
+const isTransfer = computed(
+  () => (props.awaiting.payment_kind || "expense") === "transfer",
+);
 
 function onKeyDown(e) {
   if (e.key === "Escape") emit("cancel");
@@ -28,15 +37,27 @@ onBeforeUnmount(() => {
     <div class="rpd-card" role="dialog" aria-modal="true">
       <header class="rpd-head">
         <div>
-          <span class="rpd-kicker">Record payment</span>
+          <span class="rpd-kicker">
+            {{ isTransfer ? "Record transfer" : "Record payment" }}
+          </span>
           <h3 class="rpd-title">{{ awaiting.vendor }}</h3>
           <p v-if="awaiting.reference_number" class="rpd-sub">
-            Invoice {{ awaiting.reference_number }}<template v-if="awaiting.date"> · {{ awaiting.date }}</template>
+            {{ isTransfer ? "Statement" : "Invoice" }}
+            {{ awaiting.reference_number }}<template v-if="awaiting.date">
+              · {{ awaiting.date }}</template
+            >
           </p>
         </div>
         <button class="rpd-close" @click="emit('cancel')" aria-label="Close">×</button>
       </header>
+      <RecordTransferForm
+        v-if="isTransfer"
+        :awaiting="awaiting"
+        @success="emit('success')"
+        @cancel="emit('cancel')"
+      />
       <RecordPaymentForm
+        v-else
         :awaiting="awaiting"
         @success="emit('success')"
         @cancel="emit('cancel')"

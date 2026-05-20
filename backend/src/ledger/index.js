@@ -30,8 +30,15 @@ export {
   getAwaiting,
   updateAwaiting,
   markAwaitingPaid,
+  markAwaitingWrittenOff,
   findMatchCandidates,
 } from "./awaiting.js";
+export {
+  addTransfer,
+  listTransfers,
+  getTransfer,
+  updateTransfer,
+} from "./transfers.js";
 export {
   addStatement,
   listStatements,

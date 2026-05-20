@@ -135,6 +135,20 @@ export const recordPayment = (token, awaitingId, body) =>
     body,
   );
 
+/**
+ * Settle an awaiting-transfer (e.g. credit-card balance) by recording a
+ * money movement between two of your own accounts. Body:
+ *   { date, from_source, description?, notes? }
+ * The to_source is implicit (the awaiting's vendor).
+ */
+export const recordTransferPayment = (token, awaitingId, body) =>
+  request(
+    token,
+    "POST",
+    `/api/awaiting/${encodeURIComponent(awaitingId)}/pay-transfer`,
+    body,
+  );
+
 /** Quick health check, no auth. */
 export async function healthCheck() {
   const res = await fetch(`${BASE_URL}/health`);

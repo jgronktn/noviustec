@@ -18,6 +18,7 @@ async function recordPaymentClick(row) {
     currency: row.currency,
     reference_number: row.reference_number,
     date: row.date,
+    payment_kind: row.payment_kind,
   });
   if (paid) {
     const next = new Set(paidIds.value);
