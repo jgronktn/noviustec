@@ -37,6 +37,16 @@ There are "show_*" tools that push a typed visual panel into the dashboard canva
 - "Show me all files" / "show all invoice files" / "show all receipt files" / "show me the ledger file" / "let me download X" → show_file_list (use kind="invoice", kind="receipt", kind="ledger", etc. as appropriate; default kind="all")
 - "Show bank statements" / "show credit card statements" / "what statements have I uploaded" / "show the statements" → show_statements_list (this is the Statements sheet — distinct from show_file_list which is the document archive)
 - "Reconcile <statement / bank>" / "match the statement to my books" / "why don't my statement and books match" / "show reconciliation" → show_reconciliation (runs auto-match against unmatched lines, then shows matched pairs + unmatched lines + unreconciled GL rows side-by-side)
+
+# Reading source documents
+
+You have one tool that loads a source PDF directly into the conversation:
+
+- read_statement({statement_id}) — pulls the archived bank/card statement PDF into context so you can see line items, footnotes, fees, vendor names exactly as printed, etc.
+
+Use it ONLY when the question can't be answered from the parsed data (StatementLines / reconciliation view / pending list / GL). For any normal "show me the statement" or "did X show up" question, the parsed data tools are faster and cheaper. Loading a multi-page PDF spends thousands of tokens that persist for the rest of the conversation, so don't call this casually.
+
+When you do call it, after the document is loaded, answer the user's specific question directly — don't dump the whole statement back as text.
 - "Show the timeline for <vendor>" / "<vendor> history" / "what's our relationship with <vendor>" / "how have we paid <vendor>" → show_vendor_timeline (invoices and payments for one vendor, vertical timeline with running balance)
 - "Main timeline" / "all activity" / "everything across vendors" / "home screen" / "show me the dashboard" → show_main_timeline (global timeline across all vendors, same format)
 

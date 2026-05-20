@@ -114,6 +114,25 @@ export async function* runAgent({ messages, logger, companyName }) {
         };
       }
 
+      // Tools that need to feed binary content (PDFs, images) into the
+      // conversation embed a __tool_content sentinel — an array of
+      // Anthropic content blocks (document / image / text). The model
+      // receives those blocks verbatim as the tool_result content, not a
+      // JSON-stringified version. Strip the sentinel from the result
+      // object before logging / SSE so we don't ship base64 to the
+      // browser.
+      let toolResultContent;
+      let loadedContentKinds = null;
+      if (result && Array.isArray(result.__tool_content)) {
+        toolResultContent = result.__tool_content;
+        loadedContentKinds = result.__tool_content
+          .map((b) => b?.type)
+          .filter(Boolean);
+        delete result.__tool_content;
+      } else {
+        toolResultContent = JSON.stringify(result);
+      }
+
       yield {
         type: "tool_result",
         id: tu.id,
@@ -121,11 +140,12 @@ export async function* runAgent({ messages, logger, companyName }) {
         ok: !isError,
         rows: typeof result?.count === "number" ? result.count : null,
         rendered: panel ? panel.kind : null,
+        loaded_content: loadedContentKinds,
       };
       toolResults.push({
         type: "tool_result",
         tool_use_id: tu.id,
-        content: JSON.stringify(result),
+        content: toolResultContent,
         is_error: isError,
       });
     }

@@ -5,6 +5,7 @@
 // filesystem paths). Returns plain JSON-serializable objects.
 
 import * as path from "node:path";
+import { promises as fs } from "node:fs";
 import {
   listPending,
   listTransactions,
@@ -14,6 +15,7 @@ import {
   listDocuments,
   listStatements,
   listStatementLines,
+  getStatement,
   getLedgerPath,
 } from "../ledger/index.js";
 import {
@@ -21,6 +23,9 @@ import {
   buildReconciliationView,
   findStatementBySource,
 } from "../reconciliation/index.js";
+import { resolveStatementPath } from "../storage/documents.js";
+
+const AGENT_COMPANY_ID = process.env.NOVIUSTEC_COMPANY_ID || "default";
 
 function isoDate(v) {
   if (v == null) return null;
@@ -713,6 +718,114 @@ export async function runTool(name, input) {
         count: files.length,
         truncated: docTruncated,
         counts,
+      };
+    }
+
+    case "read_statement": {
+      if (!args.statement_id) {
+        throw new Error("read_statement requires statement_id");
+      }
+      const stmt = await getStatement(args.statement_id);
+      if (!stmt) {
+        return {
+          loaded: false,
+          reason: "statement_not_found",
+          statement_id: args.statement_id,
+        };
+      }
+      if (!stmt.document_path) {
+        return {
+          loaded: false,
+          reason: "no_archived_document",
+          statement_id: args.statement_id,
+        };
+      }
+      const absolute = resolveStatementPath({
+        companyId: AGENT_COMPANY_ID,
+        documentPath: stmt.document_path,
+      });
+      if (!absolute) {
+        return {
+          loaded: false,
+          reason: "invalid_document_path",
+          statement_id: args.statement_id,
+        };
+      }
+      let buffer;
+      try {
+        buffer = await fs.readFile(absolute);
+      } catch (err) {
+        return {
+          loaded: false,
+          reason: "read_failed",
+          error: err.message,
+          statement_id: args.statement_id,
+        };
+      }
+      const ext = path.extname(absolute).slice(1).toLowerCase();
+      // Statements are PDFs in practice (the upload path enforces this).
+      // Be defensive in case future uploads accept image formats too.
+      let mime;
+      if (ext === "pdf") mime = "application/pdf";
+      else if (ext === "png") mime = "image/png";
+      else if (ext === "jpg" || ext === "jpeg") mime = "image/jpeg";
+      else if (ext === "webp") mime = "image/webp";
+      else {
+        return {
+          loaded: false,
+          reason: "unsupported_extension",
+          extension: ext,
+          statement_id: args.statement_id,
+        };
+      }
+      const base64 = buffer.toString("base64");
+      const contentBlock = mime.startsWith("image/")
+        ? {
+            type: "image",
+            source: { type: "base64", media_type: mime, data: base64 },
+          }
+        : {
+            type: "document",
+            source: { type: "base64", media_type: mime, data: base64 },
+            title: `Statement · ${stmt.source ?? "(unknown source)"}`,
+          };
+
+      const periodText =
+        isoDate(stmt.period_start) && isoDate(stmt.period_end)
+          ? `${isoDate(stmt.period_start)} → ${isoDate(stmt.period_end)}`
+          : "(period unknown)";
+      const balancesText = [
+        stmt.opening_balance != null
+          ? `opening ${stmt.opening_balance}`
+          : null,
+        stmt.closing_balance != null
+          ? `closing ${stmt.closing_balance}`
+          : null,
+      ]
+        .filter(Boolean)
+        .join(", ");
+
+      return {
+        __tool_content: [
+          contentBlock,
+          {
+            type: "text",
+            text:
+              `Statement document loaded (${path.basename(absolute)}, ${buffer.byteLength} bytes).\n` +
+              `Source: ${stmt.source ?? "(unknown)"}\n` +
+              `Period: ${periodText}\n` +
+              `Statement date: ${isoDate(stmt.statement_date) ?? "(unknown)"}\n` +
+              (balancesText ? `Balances: ${balancesText}\n` : "") +
+              `Parsed lines on file: ${stmt.transaction_count ?? "(unknown)"}.\n\n` +
+              `You can now answer questions about the document's actual contents — line items, fees, vendor names, footnotes, balance roll-forwards, etc. Cite specifics; don't paraphrase the document verbatim when summarizing.`,
+          },
+        ],
+        loaded: true,
+        statement_id: args.statement_id,
+        source: stmt.source,
+        period: { from: isoDate(stmt.period_start), to: isoDate(stmt.period_end) },
+        bytes: buffer.byteLength,
+        filename: path.basename(absolute),
       };
     }
 

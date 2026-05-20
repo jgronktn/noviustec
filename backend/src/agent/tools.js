@@ -296,6 +296,21 @@ export const TOOL_DEFINITIONS = [
     },
   },
   {
+    name: "read_statement",
+    description:
+      "Load a bank or credit-card statement's archived PDF into the conversation so you can answer detailed questions about its actual contents — line-by-line transactions in their raw printed form, vendor names that didn't normalize cleanly during parsing, fee schedules, footnotes, anything visible in the document. Use this only when the user asks something specific that show_statements_list / show_reconciliation / the StatementLines sheet doesn't already answer cleanly. COST: loading a multi-page PDF adds ~2–5k tokens per page to every subsequent turn in the conversation, so don't call it speculatively. Prefer the parsed data first; reach for this when the user asks 'what does the statement actually say about X' or you suspect the parser missed something.",
+    input_schema: {
+      type: "object",
+      required: ["statement_id"],
+      properties: {
+        statement_id: {
+          type: "string",
+          description: "Statement id (stmt_xxxxxxxx). Get it from show_statements_list if the user hasn't supplied one.",
+        },
+      },
+    },
+  },
+  {
     name: "show_reconciliation",
     description:
       "Auto-match a bank/credit-card statement's lines against GL transactions, then render the reconciliation view: matched pairs, unmatched statement lines (split into debits the user still needs to resolve and credits we can't match without an income side), and GL rows in the same payment-source/period that nothing matched against. Use when the user asks to reconcile, match a statement, or wants to know why their statement and books disagree. Source-name diagnostic surfaces the most common cause of misses (statement source like 'Business Advantage Fundamentals™ Banking ••9934' vs GL payment_source like 'BoA Business Checking').",
