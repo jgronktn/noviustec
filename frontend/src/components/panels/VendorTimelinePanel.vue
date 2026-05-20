@@ -5,19 +5,13 @@ const props = defineProps({
   data: { type: Object, required: true },
 });
 
-// Provided by App.vue. Returns a Promise<boolean> — true on submit,
-// false on cancel. Optional so the component still renders fine in
-// contexts where the dialog isn't mounted.
-const openPaymentDialog = inject("openPaymentDialog", null);
+// Provided by App.vue. Optional so the component still renders fine in
+// contexts where the dialogs aren't mounted.
 const openEditDialog = inject("openEditDialog", null);
 
-// Locally-recorded paid awaitings so the card visually flips to "paid"
-// after the dialog resolves — the panel's incoming data is a snapshot
-// and would otherwise stay stale until the user re-asks.
-const locallyPaid = ref(new Set());
-
-// Active pair highlight: click an invoice/receipt card or its payment
-// card and the other side lights up. Set null to clear.
+// Pair-highlight state kept (currently unused — click-to-highlight was
+// retired in favor of click-to-edit; keeping the ref so a future
+// secondary gesture (e.g. shift-click) can resurrect it cheaply).
 const highlightedLinkId = ref(null);
 
 // link_id → number of cards sharing it. >1 means there's an actual pair
@@ -41,73 +35,44 @@ function isLinkedActive(ev) {
   return !!ev.link_id && ev.link_id === highlightedLinkId.value;
 }
 
-function isPayClickable(ev) {
-  return (
-    openPaymentDialog != null &&
-    ev.source === "awaiting" &&
-    !locallyPaid.value.has(ev.id) &&
-    (ev.status === "awaiting" || ev.status === "overdue")
-  );
-}
-
 function canEdit(ev) {
   if (!openEditDialog) return false;
   // Right-side payment cards always edit the GL row.
   if (ev.kind === "payment") return true;
-  // Left awaiting cards (any status) → edit AwaitingPayment.
+  // Left awaiting cards (any status) → edit AwaitingPayment. Unpaid ones
+  // get a 'Record payment →' button inside the edit dialog.
   if (ev.source === "awaiting") return true;
-  // Left GL doc cards (paid receipts/confirmations/etc.) → edit GL row.
+  // Left GL doc cards → edit the underlying GL row.
   if (ev.source === "gl") return true;
   return false;
 }
 
 function isCardInteractive(ev) {
-  return isPayClickable(ev) || canEdit(ev);
+  return canEdit(ev);
 }
 
 function effectiveStatus(ev) {
-  return locallyPaid.value.has(ev.id) ? "paid" : ev.status;
+  return ev.status;
 }
 
 async function handleCardClick(ev) {
-  // 1. Unpaid awaiting invoices → Record-payment flow (unchanged).
-  if (isPayClickable(ev)) {
-    const paid = await openPaymentDialog({
-      id: ev.id,
-      vendor: ev.vendor,
-      amount: ev.amount,
-      currency: ev.currency,
-      reference_number: ev.reference_number,
-      date: ev.date,
-    });
-    if (paid) {
-      const next = new Set(locallyPaid.value);
-      next.add(ev.id);
-      locallyPaid.value = next;
-    }
-    return;
-  }
-
-  // 2. Anything else clickable → open the appropriate Edit dialog.
   if (!openEditDialog) return;
 
   if (ev.kind === "payment") {
-    // Right-side payment card → edit the GL row.
     await openEditDialog({ kind: "transaction", id: ev.id });
     return;
   }
 
   if (ev.source === "awaiting") {
-    // Left-side awaiting card (paid / written off / etc.) → edit Awaiting.
+    // All awaiting cards open the edit dialog. For unpaid ones, the
+    // dialog surfaces a 'Record payment →' button in its header.
     await openEditDialog({ kind: "awaiting", id: ev.id });
     return;
   }
 
   if (ev.source === "gl") {
-    // Left-side GL doc card. The backend now sends txn_id explicitly when
-    // emitting one card per Documents row; older event shape (fallback
-    // path with no doc rows) uses an id of `${txn}-doc`, so strip if
-    // needed.
+    // Left-side GL doc card. The backend sends txn_id explicitly when
+    // emitting per-document cards; the fallback path uses `${txn}-doc`.
     const txnId = ev.txn_id ?? ev.id.replace(/-doc$/, "");
     await openEditDialog({ kind: "transaction", id: txnId });
     return;
@@ -294,14 +259,11 @@ const monthGroups = computed(() => {
               </span>
               <span class="vt-card-amount">{{ fmt(ev.amount, ev.currency) }}</span>
               <span
-                v-if="effectiveStatus(ev) === 'awaiting' || effectiveStatus(ev) === 'overdue'"
+                v-if="ev.status === 'awaiting' || ev.status === 'overdue'"
                 class="vt-card-age"
               >
                 {{ ev.days_outstanding }}d
-                <template v-if="effectiveStatus(ev) === 'overdue'">overdue</template>
-              </span>
-              <span v-if="locallyPaid.has(ev.id)" class="vt-card-just-paid">
-                ✓ Paid
+                <template v-if="ev.status === 'overdue'">overdue</template>
               </span>
             </div>
           </div>

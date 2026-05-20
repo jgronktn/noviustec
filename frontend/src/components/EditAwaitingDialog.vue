@@ -1,5 +1,5 @@
 <script setup>
-import { ref, onMounted, onBeforeUnmount, inject } from "vue";
+import { ref, computed, onMounted, onBeforeUnmount, inject } from "vue";
 import { fetchAwaiting, updateAwaiting } from "../api.js";
 
 const props = defineProps({
@@ -8,6 +8,41 @@ const props = defineProps({
 const emit = defineEmits(["success", "cancel"]);
 
 const token = inject("apiToken");
+// Optional: provided by App.vue when the Record-payment dialog is wired
+// up. Falls back to a no-op if not present (component still renders).
+const openPaymentDialog = inject("openPaymentDialog", null);
+
+// Show the in-dialog Record-payment button only for unpaid rows.
+// "overdue" is a computed timeline-only status; in the sheet, anything
+// not-yet-paid is "awaiting".
+const canPay = computed(
+  () => openPaymentDialog && original.value?.status === "awaiting",
+);
+
+function toIsoDate(v) {
+  if (!v) return null;
+  if (typeof v === "string") return v.slice(0, 10);
+  if (v instanceof Date) return v.toISOString().slice(0, 10);
+  return null;
+}
+
+async function recordPayment() {
+  // Discard any pending form edits and hand control to the payment dialog.
+  // The user is paying the invoice, not editing it. The Record-payment
+  // success handler in App.vue calls signalLedgerChange(), which refetches
+  // every visible timeline so the row's status flips to paid on its own.
+  if (!original.value || !openPaymentDialog) return;
+  emit("cancel");
+  // Fire-and-forget; App.vue owns the dialog lifecycle from here.
+  openPaymentDialog({
+    id: original.value.id,
+    vendor: original.value.vendor,
+    amount: original.value.amount,
+    currency: original.value.currency,
+    reference_number: original.value.reference_number,
+    date: toIsoDate(original.value.date),
+  });
+}
 
 const REFERENCE_KINDS = [
   { value: "", label: "(none)" },
@@ -129,7 +164,16 @@ function fmtAmount(n, currency = "USD") {
           </h3>
           <p class="ed-sub mono">{{ awaitingId }}</p>
         </div>
-        <button class="ed-close" :disabled="submitting" @click="emit('cancel')" aria-label="Close">×</button>
+        <div class="ed-head-actions">
+          <button
+            v-if="canPay"
+            class="ed-pay-cta"
+            :disabled="submitting"
+            @click="recordPayment"
+            title="Open the Record-payment dialog for this invoice"
+          >Record payment →</button>
+          <button class="ed-close" :disabled="submitting" @click="emit('cancel')" aria-label="Close">×</button>
+        </div>
       </header>
 
       <p class="ed-hint">
@@ -288,6 +332,33 @@ function fmtAmount(n, currency = "USD") {
   margin: 0.25rem 0 0;
   font-size: 0.7rem;
   color: var(--text-muted);
+}
+
+.ed-head-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.ed-pay-cta {
+  background: var(--accent);
+  color: white;
+  border: 1px solid var(--accent);
+  font-size: 0.75rem;
+  font-weight: 600;
+  padding: 0.3rem 0.7rem;
+  border-radius: 4px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.ed-pay-cta:hover:not(:disabled) {
+  filter: brightness(1.08);
+}
+
+.ed-pay-cta:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
 }
 
 .ed-close {
