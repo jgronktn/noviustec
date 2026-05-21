@@ -35,6 +35,18 @@ function isoDate(v) {
     // dates already in YYYY-MM-DD pass through; ISO strings get truncated
     return v.length >= 10 ? v.slice(0, 10) : v;
   }
+  // Excel numeric serial date (days since 1900-01-01, with Excel's
+  // 1900-leap-year fiction). ExcelJS occasionally hands these back when
+  // cells were written with date-formatted styling but a raw number value
+  // — happens to legacy AwaitingPayment rows written before the schema
+  // standardized on Date objects. Without this branch those rows fall
+  // through to null and get silently filtered out of the timeline.
+  if (typeof v === "number" && Number.isFinite(v) && v > 1) {
+    // Excel epoch correction: Excel day 25569 = 1970-01-01 (Unix epoch).
+    const ms = (v - 25569) * 86400 * 1000;
+    const d = new Date(ms);
+    if (!Number.isNaN(d.getTime())) return d.toISOString().slice(0, 10);
+  }
   return null;
 }
 

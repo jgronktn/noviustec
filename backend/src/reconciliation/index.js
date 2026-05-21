@@ -33,6 +33,12 @@ function toIsoDate(v) {
   if (!v) return null;
   if (typeof v === "string") return v.slice(0, 10);
   if (v instanceof Date) return v.toISOString().slice(0, 10);
+  // Excel numeric serial date (see handlers.js isoDate for context).
+  if (typeof v === "number" && Number.isFinite(v) && v > 1) {
+    const ms = (v - 25569) * 86400 * 1000;
+    const d = new Date(ms);
+    if (!Number.isNaN(d.getTime())) return d.toISOString().slice(0, 10);
+  }
   return null;
 }
 
