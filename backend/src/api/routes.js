@@ -54,6 +54,7 @@ import {
   addTransfer,
   listTransfers,
   getTransfer,
+  updateTransfer,
 } from "../ledger/index.js";
 import { runAgent } from "../agent/loop.js";
 import { buildTimelineProps } from "../agent/handlers.js";
@@ -128,6 +129,57 @@ function corsHeadersFor(origin) {
     "Access-Control-Allow-Credentials": "true",
     Vary: "Origin",
   };
+}
+
+// Last-4 sniffer used by the auto-link heuristic in mark-as-transfer.
+// Matches "••XXXX", "•XXXX", "**XXXX", "XX-XXXX" — same shape as the
+// reconciliation module's matcher.
+function extractLast4(s) {
+  if (!s) return null;
+  const m = String(s).match(/(?:••?|\*\*|-)\s*(\d{4})\b/);
+  return m ? m[1] : null;
+}
+
+function sameAccountName(a, b) {
+  if (!a || !b) return false;
+  const aa = String(a).toLowerCase().trim();
+  const bb = String(b).toLowerCase().trim();
+  if (aa === bb) return true;
+  const la = extractLast4(a);
+  const lb = extractLast4(b);
+  return !!(la && lb && la === lb);
+}
+
+/**
+ * Look for an outstanding payment_kind="transfer" awaiting that the
+ * just-built Transfer would settle. Heuristic:
+ *   - awaiting.status === "awaiting"
+ *   - awaiting.payment_kind === "transfer"
+ *   - awaiting.amount within $0.01 of the Transfer's amount
+ *   - awaiting.vendor (the card / account it's owed against) matches
+ *     either the Transfer's to_source or from_source by name or last-4
+ *
+ * Returns the awaiting row when EXACTLY ONE candidate is found.
+ * Multiple candidates → returns null (ambiguous, leave to user); zero
+ * candidates → returns null. Uses dynamic import for listAwaiting so
+ * routes.js doesn't have to grow another top-level import.
+ */
+async function findOutstandingAwaitingTransfer({
+  fromSource,
+  toSource,
+  amount,
+}) {
+  const { listAwaiting } = await import("../ledger/index.js");
+  const allAwaiting = await listAwaiting({ status: "awaiting" });
+  const candidates = allAwaiting.filter((aw) => {
+    if ((aw.payment_kind || "expense") !== "transfer") return false;
+    if (Math.abs(Number(aw.amount) - amount) > 0.01) return false;
+    return (
+      sameAccountName(aw.vendor, toSource) ||
+      sameAccountName(aw.vendor, fromSource)
+    );
+  });
+  return candidates.length === 1 ? candidates[0] : null;
 }
 
 export default async function apiRoutes(fastify, opts) {
@@ -1900,6 +1952,20 @@ export default async function apiRoutes(fastify, opts) {
           ? canonicalOther || req.body.other_source
           : stmt.source;
 
+        // ── Auto-link to any outstanding awaiting-transfer this would settle ──
+        // The most common case: a card-balance awaiting-transfer (auto-created
+        // at card-statement import) is outstanding for ••9475, and the user is
+        // now marking the bank-side debit line as a transfer TO ••9475. If the
+        // amounts match exactly and the to_source/from_source matches the
+        // awaiting's vendor, link them so the awaiting flips to paid and its
+        // left-side timeline card visually settles.
+        const awaitingMatch = await findOutstandingAwaitingTransfer({
+          fromSource,
+          toSource,
+          amount,
+        });
+        const linkAwaitingId = awaitingMatch?.id ?? null;
+
         const { id: transferId } = await addTransfer({
           date: req.body.date,
           amount,
@@ -1909,8 +1975,24 @@ export default async function apiRoutes(fastify, opts) {
           description: req.body.description || line.description || "",
           notes: req.body.notes ?? "",
           source_file: stmt.source_file ?? null,
+          awaiting_id: linkAwaitingId,
           created_by: "user",
         });
+
+        if (linkAwaitingId) {
+          try {
+            await markAwaitingPaid(linkAwaitingId, {
+              paid_transfer_id: transferId,
+            });
+          } catch (err) {
+            // Best-effort: the Transfer is already created and the line is
+            // about to be matched. Log but don't fail the request.
+            req.log.error(
+              { err: err.message, awaiting_id: linkAwaitingId, transfer_id: transferId },
+              "auto-link of awaiting-transfer failed; transfer still created",
+            );
+          }
+        }
 
         await updateStatementLine(lineId, {
           matched_txn_id: null,
@@ -1925,11 +2007,16 @@ export default async function apiRoutes(fastify, opts) {
             from_source: fromSource,
             to_source: toSource,
             amount,
+            auto_linked_awaiting: linkAwaitingId,
           },
           "statement line marked as transfer",
         );
 
-        return { line_id: lineId, transfer_id: transferId };
+        return {
+          line_id: lineId,
+          transfer_id: transferId,
+          auto_linked_awaiting: linkAwaitingId,
+        };
       } catch (err) {
         req.log.error(
           { err: err.message, line_id: lineId },

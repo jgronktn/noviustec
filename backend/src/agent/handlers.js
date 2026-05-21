@@ -15,6 +15,7 @@ import {
   listDocuments,
   listStatements,
   listStatementLines,
+  listTransfers,
   getStatement,
   getLedgerPath,
 } from "../ledger/index.js";
@@ -177,16 +178,27 @@ export async function buildTimelineProps({ vendor = null, from, to } = {}) {
   // ship an invoice PDF and a receipt PDF together — both belong on the
   // timeline as separate events tied to the same payment.
   const docsAll = await listDocuments();
-  // Pre-fetch every StatementLine so right-side payment cards can show a
+  // Pre-fetch every StatementLine so right-side cards can show a
   // green check when reconciled against a statement (card or bank). A GL
   // txn is "statement-matched" iff at least one StatementLine.matched_txn_id
-  // points at it. Cheap to load — used to drive a UI tick, not for matching.
+  // points at it; same for transfers via matched_transfer_id. Cheap to
+  // load — used to drive UI ticks, not for matching itself.
   const statementLinesAll = await listStatementLines();
   const txnIdsMatchedOnStatement = new Set(
     statementLinesAll
       .filter((l) => l.matched_txn_id)
       .map((l) => l.matched_txn_id),
   );
+  const transferIdsMatchedOnStatement = new Set(
+    statementLinesAll
+      .filter((l) => l.matched_transfer_id)
+      .map((l) => l.matched_transfer_id),
+  );
+
+  // Transfers in the period — feed both the right-side cards and the
+  // left-side awaiting cards (for the "settling transfer reconciled?"
+  // signal that drives the green check on a Card balance card).
+  const transferAll = await listTransfers({ from, to });
   // Group docs by their GL transaction id. Skip docs that are ALSO tied to
   // an AwaitingPayment row: those already get a left card from the awaiting
   // side (drawn on the invoice's date, not the payment date), and we don't
@@ -244,6 +256,14 @@ export async function buildTimelineProps({ vendor = null, from, to } = {}) {
     // get a distinct visual treatment in the frontend so they don't read
     // as a vendor invoice.
     const isTransferObligation = r.payment_kind === "transfer";
+    // The awaiting card is "statement-matched" when its settling artifact
+    // (a GL row OR a Transfer) is itself matched on some StatementLine.
+    // That signals the full loop is closed: obligation → payment →
+    // statement reconciliation. The frontend lights a green check.
+    const awaitingStatementMatched =
+      (r.paid_txn_id && txnIdsMatchedOnStatement.has(r.paid_txn_id)) ||
+      (r.paid_transfer_id &&
+        transferIdsMatchedOnStatement.has(r.paid_transfer_id));
     leftEvents.push({
       id: r.id,
       kind: r.reference_kind || "invoice",
@@ -266,6 +286,7 @@ export async function buildTimelineProps({ vendor = null, from, to } = {}) {
       description: r.description ?? "",
       vendor: r.vendor,
       source: "awaiting",
+      statement_matched: !!awaitingStatementMatched,
     });
   }
 
@@ -343,6 +364,51 @@ export async function buildTimelineProps({ vendor = null, from, to } = {}) {
     link_id: r.id,
     statement_matched: txnIdsMatchedOnStatement.has(r.id),
   }));
+
+  // Right-side Transfer cards. For a vendor-filtered timeline only include
+  // transfers whose linked awaiting matches the vendor (the awaiting's
+  // vendor IS the counterparty account — e.g. a card source — and that's
+  // what shows up in the awaiting's left-side card). For the global
+  // (all-vendor) timeline include every transfer in the period.
+  //
+  // Vendor display: transfers don't have a vendor field; for the global
+  // view we synthesize one from the destination account so the card has
+  // something to label. The frontend renders this in the card-vendor slot.
+  const awaitingByIdQuick = new Map(awaitingAll.map((a) => [a.id, a]));
+  const matchedTransfers = transferAll.filter((t) => {
+    if (!vendor) return true;
+    if (!t.awaiting_id) return false;
+    const aw = awaitingByIdQuick.get(t.awaiting_id);
+    return aw && vendorMatches(aw.vendor, vendor);
+  });
+
+  for (const t of matchedTransfers) {
+    const linkedAwaiting = t.awaiting_id
+      ? awaitingByIdQuick.get(t.awaiting_id)
+      : null;
+    rightEvents.push({
+      id: t.id,
+      kind: "transfer",
+      date: isoDate(t.date),
+      amount: Math.round(Number(t.amount) * 100) / 100,
+      currency: t.currency ?? "USD",
+      reference_number: null,
+      reference_kind: null,
+      description: t.description ?? "",
+      category: null,
+      payment_source: t.from_source ?? null,
+      to_source: t.to_source ?? null,
+      from_source: t.from_source ?? null,
+      // Use the destination account as the "vendor" so the global-mode
+      // timeline has something to label the card with.
+      vendor: t.to_source ?? "Transfer",
+      // If the transfer settles an awaiting, share its link_id so any
+      // future pair-highlight logic can find both sides.
+      link_id: linkedAwaiting ? linkedAwaiting.id : t.id,
+      awaiting_id: t.awaiting_id ?? null,
+      statement_matched: transferIdsMatchedOnStatement.has(t.id),
+    });
+  }
 
   const dateSet = new Set([
     ...leftEvents.map((e) => e.date).filter(Boolean),

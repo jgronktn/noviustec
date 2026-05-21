@@ -39,6 +39,9 @@ function canEdit(ev) {
   if (!openEditDialog) return false;
   // Right-side payment cards always edit the GL row.
   if (ev.kind === "payment") return true;
+  // Right-side transfer cards aren't editable yet (no edit-transfer
+  // dialog), but they ARE clickable in the sense they're informational.
+  if (ev.kind === "transfer") return false;
   // Left awaiting cards (any status) → edit AwaitingPayment. Unpaid ones
   // get a 'Record payment →' button inside the edit dialog.
   if (ev.source === "awaiting") return true;
@@ -122,6 +125,7 @@ function kindLabel(ev) {
   if (kind === "invoice") return "Invoice";
   if (kind === "receipt") return "Receipt";
   if (kind === "payment") return "Payment";
+  if (kind === "transfer") return "Transfer";
   if (kind === "statement") return "Statement";
   return kind ? kind.charAt(0).toUpperCase() + kind.slice(1) : "—";
 }
@@ -272,6 +276,11 @@ const monthGroups = computed(() => {
                 {{ ev.days_outstanding }}d
                 <template v-if="ev.status === 'overdue'">overdue</template>
               </span>
+              <span
+                v-if="ev.statement_matched"
+                class="vt-card-stmt-check"
+                title="Settling transfer or payment is reconciled against a statement line"
+              >✓</span>
             </div>
           </div>
 
@@ -286,17 +295,24 @@ const monthGroups = computed(() => {
               :key="ev.id"
               class="vt-card vt-card-right"
               :class="[
-                { 'vt-card-clickable': hasLinkedSibling(ev) },
+                { 'vt-card-clickable': hasLinkedSibling(ev) || canEdit(ev) },
                 { 'vt-card-linked': isLinkedActive(ev) },
+                { 'vt-card-transfer-right': ev.kind === 'transfer' },
               ]"
               :title="canEdit(ev) ? 'Click to edit' : (ev.description || '')"
               @click="handleCardClick(ev)"
             >
               <span class="vt-card-kind">{{ kindLabel(ev) }}</span>
               <span v-if="data.is_global" class="vt-card-vendor">{{ ev.vendor }}</span>
-              <span v-if="ev.payment_source" class="vt-card-source">
-                {{ ev.payment_source }}
-              </span>
+              <!-- Transfers: show "<from> → <to>"; payments: show payment_source. -->
+              <span
+                v-if="ev.kind === 'transfer' && (ev.from_source || ev.to_source)"
+                class="vt-card-source"
+              >{{ ev.from_source || "?" }} → {{ ev.to_source || "?" }}</span>
+              <span
+                v-else-if="ev.payment_source"
+                class="vt-card-source"
+              >{{ ev.payment_source }}</span>
               <span class="vt-card-amount">{{ fmt(ev.amount, ev.currency) }}</span>
               <span v-if="ev.category" class="vt-card-cat">{{ ev.category }}</span>
               <span
@@ -668,6 +684,17 @@ const monthGroups = computed(() => {
 .vt-card-right {
   background: #eff6ff;
   border-color: #bfdbfe;
+}
+
+/* Right-side Transfer card — purple to match the card-balance left card,
+   making the obligation→settlement pair visually correlated. */
+.vt-card-right.vt-card-transfer-right {
+  background: #f5f3ff;
+  border-color: #c4b5fd;
+}
+
+.vt-card-right.vt-card-transfer-right .vt-card-kind {
+  color: #6d28d9;
 }
 
 .vt-card-kind {
