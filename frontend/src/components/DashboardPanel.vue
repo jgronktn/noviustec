@@ -2,6 +2,7 @@
 import { ref, watch } from "vue";
 import ReviewPanel from "./ReviewPanel.vue";
 import PnlChartPanel from "./panels/PnlChartPanel.vue";
+import MonthlySpendPanel from "./panels/MonthlySpendPanel.vue";
 import TransactionTablePanel from "./panels/TransactionTablePanel.vue";
 import AwaitingTablePanel from "./panels/AwaitingTablePanel.vue";
 import KpiSummaryPanel from "./panels/KpiSummaryPanel.vue";
@@ -31,6 +32,7 @@ watch(
 
 const KIND_TO_COMPONENT = {
   pnl_chart: PnlChartPanel,
+  monthly_spend_chart: MonthlySpendPanel,
   transaction_table: TransactionTablePanel,
   awaiting_table: AwaitingTablePanel,
   kpi_summary: KpiSummaryPanel,

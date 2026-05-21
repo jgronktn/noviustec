@@ -625,6 +625,127 @@ export async function runTool(name, input) {
     // loop strips __panel out, yields it as a `panel` SSE event, and
     // sends the rest to the model as the tool_result.
 
+    case "show_monthly_spend": {
+      // Default range: trailing 12 months ending today.
+      const today = new Date();
+      const defaultTo = today.toISOString().slice(0, 10);
+      const past = new Date(
+        Date.UTC(today.getUTCFullYear(), today.getUTCMonth() - 11, 1),
+      );
+      const defaultFrom = past.toISOString().slice(0, 10);
+      const from = args.from || defaultFrom;
+      const to = args.to || defaultTo;
+
+      let txns = await listTransactions({ from, to });
+
+      // Case-insensitive substring category filters — so 'travel'
+      // matches 'Travel - Flights', 'Travel - Meals', etc.
+      const include = (args.include_categories ?? []).map((c) =>
+        String(c).toLowerCase(),
+      );
+      const exclude = (args.exclude_categories ?? []).map((c) =>
+        String(c).toLowerCase(),
+      );
+      if (include.length > 0) {
+        txns = txns.filter((t) =>
+          include.some((inc) =>
+            String(t.category || "").toLowerCase().includes(inc),
+          ),
+        );
+      }
+      if (exclude.length > 0) {
+        txns = txns.filter(
+          (t) =>
+            !exclude.some((exc) =>
+              String(t.category || "").toLowerCase().includes(exc),
+            ),
+        );
+      }
+
+      // Pre-populate every month in range so empty months render as
+      // zero-height bars — time passing is part of the story.
+      const months = new Map(); // YYYY-MM → { month, total, count }
+      const start = new Date(from);
+      let cursor = new Date(
+        Date.UTC(start.getUTCFullYear(), start.getUTCMonth(), 1),
+      );
+      const end = new Date(to);
+      while (cursor <= end) {
+        const ym = cursor.toISOString().slice(0, 7);
+        months.set(ym, { month: ym, total: 0, count: 0 });
+        cursor = new Date(
+          Date.UTC(cursor.getUTCFullYear(), cursor.getUTCMonth() + 1, 1),
+        );
+      }
+
+      for (const t of txns) {
+        const d = isoDate(t.date);
+        if (!d) continue;
+        const ym = d.slice(0, 7);
+        if (!months.has(ym)) {
+          months.set(ym, { month: ym, total: 0, count: 0 });
+        }
+        const bucket = months.get(ym);
+        bucket.total += Math.abs(Number(t.amount) || 0);
+        bucket.count += 1;
+      }
+
+      const sorted = [...months.values()].sort((a, b) =>
+        a.month.localeCompare(b.month),
+      );
+      for (const m of sorted) m.total = Math.round(m.total * 100) / 100;
+
+      const totalSpend = sorted.reduce((s, m) => s + m.total, 0);
+      const totalCount = sorted.reduce((s, m) => s + m.count, 0);
+      const active = sorted.filter((m) => m.total > 0);
+      const avg = active.length > 0 ? totalSpend / active.length : 0;
+      const peak = sorted.reduce(
+        (acc, m) => (m.total > (acc?.total ?? -1) ? m : acc),
+        null,
+      );
+
+      const filterParts = [];
+      if (include.length > 0)
+        filterParts.push(`only ${args.include_categories.join(", ")}`);
+      if (exclude.length > 0)
+        filterParts.push(`excluding ${args.exclude_categories.join(", ")}`);
+      const filterDesc = filterParts.join(" · ");
+      const title =
+        args.title ??
+        (filterDesc ? `Monthly spend · ${filterDesc}` : "Monthly spend");
+
+      return {
+        __panel: {
+          kind: "monthly_spend_chart",
+          title,
+          props: {
+            months: sorted,
+            period: { from, to },
+            filters: {
+              include: args.include_categories ?? [],
+              exclude: args.exclude_categories ?? [],
+            },
+            summary: {
+              total_spend: Math.round(totalSpend * 100) / 100,
+              total_count: totalCount,
+              months_with_activity: active.length,
+              average_per_active_month: Math.round(avg * 100) / 100,
+              peak_month: peak?.month ?? null,
+              peak_amount: peak?.total ?? 0,
+            },
+          },
+        },
+        period: { from, to },
+        total_spend: Math.round(totalSpend * 100) / 100,
+        total_count: totalCount,
+        months: sorted.map((m) => ({
+          month: m.month,
+          total: m.total,
+          count: m.count,
+        })),
+      };
+    }
+
     case "show_pnl_chart": {
       const pnl = await computePnl({ from: args.from, to: args.to });
       const title = args.title ?? `P&L · ${args.from} – ${args.to}`;

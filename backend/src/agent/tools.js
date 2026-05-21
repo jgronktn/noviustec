@@ -149,6 +149,40 @@ export const TOOL_DEFINITIONS = [
     },
   },
   {
+    name: "show_monthly_spend",
+    description:
+      "Render a vertical bar chart of total spend per month over a date range. Use for 'show monthly spend', 'spend by month', or any time the user wants to see month-over-month variation (distinct from show_pnl_chart, which groups by category across a single range). Supports include_categories (only count these) and exclude_categories (skip these) so prompts like 'show monthly spend without professional services' or 'show monthly travel spend' work in one call. Default range is the trailing 12 months ending today.",
+    input_schema: {
+      type: "object",
+      properties: {
+        from: {
+          type: "string",
+          description: "Inclusive YYYY-MM-DD start. Defaults to the start of the month 12 months ago.",
+        },
+        to: {
+          type: "string",
+          description: "Inclusive YYYY-MM-DD end. Defaults to today.",
+        },
+        include_categories: {
+          type: "array",
+          items: { type: "string" },
+          description:
+            "Only include transactions whose category contains one of these names (case-insensitive substring match — 'travel' matches 'Travel - Flights' and 'Travel - Meals'). Combine with exclude_categories carefully; include wins when both apply.",
+        },
+        exclude_categories: {
+          type: "array",
+          items: { type: "string" },
+          description:
+            "Skip transactions whose category contains one of these names. Use for 'show monthly spend without X'. Case-insensitive substring match.",
+        },
+        title: {
+          type: "string",
+          description: "Optional panel title. Defaults to 'Monthly spend' plus a filter description.",
+        },
+      },
+    },
+  },
+  {
     name: "show_transaction_table",
     description:
       "Render a table of GL transactions in the dashboard. Use when the user wants to inspect individual rows for a date range, category, vendor, or payment source. Caps at 100 rows.",
