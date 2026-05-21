@@ -122,6 +122,35 @@ export const unmatchStatementLine = (token, lineId) =>
   );
 
 /**
+ * Book an unmatched statement debit line as a brand-new GL transaction
+ * (late fees, finance charges, anything missing from the books). The
+ * server creates the GL row and matches the statement line to it in
+ * one call. Body:
+ *   { vendor, category, date, payment_source, description?, notes? }
+ */
+export const bookStatementLineAsTransaction = (token, lineId, body) =>
+  request(
+    token,
+    "POST",
+    `/api/statement-lines/${encodeURIComponent(lineId)}/book-as-transaction`,
+    body,
+  );
+
+/**
+ * Mark an unmatched statement line as an inter-account transfer. The
+ * server creates a Transfer row whose direction is inferred from the
+ * line's sign (debit=out, credit=in) and matches the line to it. Body:
+ *   { other_source, date, description?, notes? }
+ */
+export const markStatementLineAsTransfer = (token, lineId, body) =>
+  request(
+    token,
+    "POST",
+    `/api/statement-lines/${encodeURIComponent(lineId)}/mark-as-transfer`,
+    body,
+  );
+
+/**
  * Record a manual payment against an outstanding AwaitingPayment row.
  * No receipt document required — for checks, credit-card charges with
  * no vendor receipt, etc. Books a GL row using the awaiting row's

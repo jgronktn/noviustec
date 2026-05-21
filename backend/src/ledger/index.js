@@ -2,7 +2,7 @@
 // Workbook path is resolved from LEDGER_PATH env var (default: ./companies/default/ledger.xlsx).
 
 export { initLedger, getLedgerPath } from "./workbook.js";
-export { getCategories } from "./categories.js";
+export { getCategories, addCategory } from "./categories.js";
 export { getPaymentSources, ensurePaymentSource } from "./sources.js";
 export {
   addPending,

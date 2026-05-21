@@ -23,6 +23,7 @@ import {
   getDocument,
   getKnownVendors,
   addStatement,
+  getStatement,
   updateStatementLine,
   listStatementLines,
 } from "../ledger/index.js";
@@ -1733,6 +1734,7 @@ export default async function apiRoutes(fastify, opts) {
     try {
       const result = await updateStatementLine(req.params.id, {
         matched_txn_id: null,
+        matched_transfer_id: null,
         match_method: null,
       });
       req.log.info({ line_id: req.params.id }, "statement line unmatched");
@@ -1747,10 +1749,201 @@ export default async function apiRoutes(fastify, opts) {
   });
 
   // ─────────────────────────────────────────────────────────────────────────
+  // POST /api/statement-lines/:id/book-as-transaction — turn an unmatched
+  // statement debit line into a GL transaction in one click. Used for
+  // late fees, finance charges, and any other charge that appeared on
+  // the statement but wasn't already in the books from a receipt.
+  // ─────────────────────────────────────────────────────────────────────────
+  fastify.post(
+    "/api/statement-lines/:id/book-as-transaction",
+    {
+      schema: {
+        body: {
+          type: "object",
+          required: ["vendor", "category", "date", "payment_source"],
+          additionalProperties: false,
+          properties: {
+            vendor: { type: "string", minLength: 1 },
+            category: { type: "string", minLength: 1 },
+            date: { type: "string", minLength: 1 }, // YYYY-MM-DD
+            payment_source: { type: "string", minLength: 1 },
+            description: { type: "string", default: "" },
+            notes: { type: "string", default: "" },
+            reference_kind: { type: "string", default: "statement" },
+          },
+        },
+      },
+    },
+    async (req, reply) => {
+      const { id: lineId } = req.params;
+      try {
+        const allLines = await listStatementLines();
+        const line = allLines.find((l) => l.id === lineId);
+        if (!line) {
+          return reply.code(404).send({ error: "Statement line not found" });
+        }
+        if (line.matched_txn_id || line.matched_transfer_id) {
+          return reply
+            .code(409)
+            .send({ error: "Statement line is already matched" });
+        }
+        const stmt = await getStatement(line.statement_id);
+
+        // Register payment source if new — same convention as Record-payment.
+        const { name: canonicalSource } = await ensurePaymentSource(
+          req.body.payment_source,
+        );
+
+        // Statement debits are stored as negative amounts (charges); the
+        // GL row's amount is always the absolute value of the charge.
+        const amount = Math.abs(Number(line.amount));
+
+        const { id: txnId } = await addTransaction({
+          date: req.body.date,
+          vendor: req.body.vendor,
+          description: req.body.description || line.description || "",
+          category: req.body.category,
+          payment_source: canonicalSource || req.body.payment_source,
+          amount,
+          currency: stmt?.currency ?? "USD",
+          reference_number: stmt?.id ?? null,
+          reference_kind: req.body.reference_kind || "statement",
+          notes: req.body.notes ?? "",
+          source_file: stmt?.source_file ?? null,
+          created_by: "user",
+        });
+
+        await updateStatementLine(lineId, {
+          matched_txn_id: txnId,
+          matched_transfer_id: null,
+          match_method: "manual",
+        });
+
+        req.log.info(
+          {
+            line_id: lineId,
+            txn_id: txnId,
+            vendor: req.body.vendor,
+            category: req.body.category,
+            amount,
+          },
+          "statement line booked as new transaction",
+        );
+
+        return { line_id: lineId, txn_id: txnId };
+      } catch (err) {
+        req.log.error(
+          { err: err.message, line_id: lineId },
+          "book-as-transaction failed",
+        );
+        return reply.code(500).send({ error: err.message });
+      }
+    },
+  );
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // POST /api/statement-lines/:id/mark-as-transfer — turn an unmatched
+  // statement line into a Transfer row in one click. For a debit line,
+  // money is leaving this account → from_source = statement source.
+  // For a credit line, money is arriving → to_source = statement source.
+  // The opposite side is the user-picked counterparty (other_source).
+  // ─────────────────────────────────────────────────────────────────────────
+  fastify.post(
+    "/api/statement-lines/:id/mark-as-transfer",
+    {
+      schema: {
+        body: {
+          type: "object",
+          required: ["other_source", "date"],
+          additionalProperties: false,
+          properties: {
+            other_source: { type: "string", minLength: 1 },
+            date: { type: "string", minLength: 1 },
+            description: { type: "string", default: "" },
+            notes: { type: "string", default: "" },
+          },
+        },
+      },
+    },
+    async (req, reply) => {
+      const { id: lineId } = req.params;
+      try {
+        const allLines = await listStatementLines();
+        const line = allLines.find((l) => l.id === lineId);
+        if (!line) {
+          return reply.code(404).send({ error: "Statement line not found" });
+        }
+        if (line.matched_txn_id || line.matched_transfer_id) {
+          return reply
+            .code(409)
+            .send({ error: "Statement line is already matched" });
+        }
+        const stmt = await getStatement(line.statement_id);
+        if (!stmt) {
+          return reply
+            .code(404)
+            .send({ error: "Parent statement not found" });
+        }
+
+        const { name: canonicalOther } = await ensurePaymentSource(
+          req.body.other_source,
+        );
+
+        const amount = Math.abs(Number(line.amount));
+        const isDebit = Number(line.amount) < 0;
+        // Debit on the statement → money LEFT this account → from = statement source.
+        // Credit on the statement → money ARRIVED at this account → to = statement source.
+        const fromSource = isDebit
+          ? stmt.source
+          : canonicalOther || req.body.other_source;
+        const toSource = isDebit
+          ? canonicalOther || req.body.other_source
+          : stmt.source;
+
+        const { id: transferId } = await addTransfer({
+          date: req.body.date,
+          amount,
+          currency: stmt.currency ?? "USD",
+          from_source: fromSource,
+          to_source: toSource,
+          description: req.body.description || line.description || "",
+          notes: req.body.notes ?? "",
+          source_file: stmt.source_file ?? null,
+          created_by: "user",
+        });
+
+        await updateStatementLine(lineId, {
+          matched_txn_id: null,
+          matched_transfer_id: transferId,
+          match_method: "manual",
+        });
+
+        req.log.info(
+          {
+            line_id: lineId,
+            transfer_id: transferId,
+            from_source: fromSource,
+            to_source: toSource,
+            amount,
+          },
+          "statement line marked as transfer",
+        );
+
+        return { line_id: lineId, transfer_id: transferId };
+      } catch (err) {
+        req.log.error(
+          { err: err.message, line_id: lineId },
+          "mark-as-transfer failed",
+        );
+        return reply.code(500).send({ error: err.message });
+      }
+    },
+  );
+
+  // ─────────────────────────────────────────────────────────────────────────
   // GET /api/documents/statement/:id — download an archived statement PDF.
   // ─────────────────────────────────────────────────────────────────────────
   fastify.get("/api/documents/statement/:id", async (req, reply) => {
-    const { getStatement } = await import("../ledger/index.js");
     const stmt = await getStatement(req.params.id);
     if (!stmt) return reply.code(404).send({ error: "Statement not found" });
     if (!stmt.document_path) {

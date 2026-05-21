@@ -1,9 +1,13 @@
 <script setup>
-import { ref, computed, inject } from "vue";
+import { ref, computed, inject, onMounted } from "vue";
 import {
   matchStatementLine,
   unmatchStatementLine,
   fetchReconciliation,
+  bookStatementLineAsTransaction,
+  markStatementLineAsTransfer,
+  getCategories,
+  getPaymentSources,
 } from "../../api.js";
 
 const props = defineProps({
@@ -17,10 +21,97 @@ const signalLedgerChange = inject("signalLedgerChange", () => {});
 // matches without waiting for the parent to push fresh props.
 const view = ref(props.data);
 
-// Which line is currently picking a GL row?
-const pickingForLineId = ref(null);
+// Per-line state machine for the action expansion. activeAction is one of
+// null | "match" | "book" | "transfer". Only one line can have an action
+// open at a time; opening on a different line auto-closes the first.
+const activeLineId = ref(null);
+const activeAction = ref(null);
 const pickingError = ref(null);
 const busyLineIds = ref(new Set());
+
+// Categories + payment sources loaded once on mount for the dropdowns.
+// Fall back to empty arrays so the forms still render if the fetch fails.
+const categories = ref([]);
+const paymentSources = ref([]);
+
+onMounted(async () => {
+  try {
+    const [cats, srcs] = await Promise.all([
+      getCategories(token.value),
+      getPaymentSources(token.value),
+    ]);
+    categories.value = Array.isArray(cats) ? cats : cats?.categories ?? [];
+    paymentSources.value = Array.isArray(srcs) ? srcs : srcs?.sources ?? [];
+  } catch (e) {
+    pickingError.value = `Couldn't load categories/sources: ${e.message}`;
+  }
+});
+
+// In-progress form state for the Book / Mark forms — keyed by lineId
+// so re-renders don't blow away what the user has typed.
+const bookForms = ref({});
+const transferForms = ref({});
+
+function bookFormFor(line) {
+  if (!bookForms.value[line.id]) {
+    // Sensible defaults: vendor pre-fills from the statement source
+    // (most fees come from the issuing bank), category defaults to the
+    // best-guess from the line description.
+    const guessedCategory = guessCategoryForLine(line);
+    bookForms.value[line.id] = {
+      vendor: view.value.statement.source ?? "",
+      category: guessedCategory,
+      date: line.line_date || view.value.statement.statement_date || "",
+      payment_source: view.value.statement.source ?? "",
+      description: line.description || "",
+      notes: "",
+    };
+  }
+  return bookForms.value[line.id];
+}
+
+function transferFormFor(line) {
+  if (!transferForms.value[line.id]) {
+    transferForms.value[line.id] = {
+      other_source: "",
+      date: line.line_date || view.value.statement.statement_date || "",
+      description: line.description || "",
+      notes: "",
+    };
+  }
+  return transferForms.value[line.id];
+}
+
+// Tiny heuristic so the Book form starts with the "right" category
+// pre-selected for fees and interest. The user can override; this is
+// just a starting point for the most common card-statement extras.
+function guessCategoryForLine(line) {
+  const desc = String(line?.description ?? "").toLowerCase();
+  const findByName = (re) =>
+    categories.value.find((c) => re.test(String(c.name ?? "").toLowerCase()));
+  if (/interest|finance charge|periodic finance/.test(desc)) {
+    return findByName(/interest/)?.name ?? "";
+  }
+  if (/late fee|past due|delinquent|nsf|overdraft|wire fee/.test(desc)) {
+    return findByName(/bank fee/)?.name ?? "";
+  }
+  return "";
+}
+
+function setAction(lineId, action) {
+  activeLineId.value = lineId;
+  activeAction.value = action;
+  pickingError.value = null;
+}
+
+function closeAction() {
+  activeLineId.value = null;
+  activeAction.value = null;
+}
+
+function isActive(lineId, action) {
+  return activeLineId.value === lineId && activeAction.value === action;
+}
 
 function fmt(amount, currency = "USD") {
   if (amount == null) return "—";
@@ -58,12 +149,66 @@ async function manualMatch(lineId, txnId) {
   try {
     await matchStatementLine(token.value, lineId, txnId);
     await refresh();
-    pickingForLineId.value = null;
+    closeAction();
     signalLedgerChange();
   } catch (e) {
     pickingError.value = e.message || "Match failed.";
   } finally {
     setBusy(lineId, false);
+  }
+}
+
+async function submitBook(line) {
+  pickingError.value = null;
+  const form = bookFormFor(line);
+  if (!form.vendor || !form.category || !form.date || !form.payment_source) {
+    pickingError.value = "Vendor, category, date, and payment source are required.";
+    return;
+  }
+  setBusy(line.id, true);
+  try {
+    await bookStatementLineAsTransaction(token.value, line.id, {
+      vendor: form.vendor,
+      category: form.category,
+      date: form.date,
+      payment_source: form.payment_source,
+      description: form.description,
+      notes: form.notes,
+    });
+    delete bookForms.value[line.id];
+    await refresh();
+    closeAction();
+    signalLedgerChange();
+  } catch (e) {
+    pickingError.value = e.message || "Book-as-transaction failed.";
+  } finally {
+    setBusy(line.id, false);
+  }
+}
+
+async function submitTransfer(line) {
+  pickingError.value = null;
+  const form = transferFormFor(line);
+  if (!form.other_source || !form.date) {
+    pickingError.value = "Other account and date are required.";
+    return;
+  }
+  setBusy(line.id, true);
+  try {
+    await markStatementLineAsTransfer(token.value, line.id, {
+      other_source: form.other_source,
+      date: form.date,
+      description: form.description,
+      notes: form.notes,
+    });
+    delete transferForms.value[line.id];
+    await refresh();
+    closeAction();
+    signalLedgerChange();
+  } catch (e) {
+    pickingError.value = e.message || "Mark-as-transfer failed.";
+  } finally {
+    setBusy(line.id, false);
   }
 }
 
@@ -285,7 +430,8 @@ const hasError = computed(() => view.value && typeof view.value.error === "strin
             <p class="rc-desc">{{ line.description }}</p>
           </div>
 
-          <div v-if="pickingForLineId === line.id" class="rc-picker">
+          <!-- Action panel: only one mode active per line at a time. -->
+          <div v-if="isActive(line.id, 'match')" class="rc-picker">
             <p class="rc-picker-title">Match to which GL row?</p>
             <div
               v-if="candidatesForLine(line).length === 0"
@@ -317,33 +463,261 @@ const hasError = computed(() => view.value && typeof view.value.error === "strin
                 </button>
               </li>
             </ul>
-            <button class="ghost" @click="pickingForLineId = null">Cancel</button>
+            <button class="ghost" @click="closeAction">Cancel</button>
           </div>
-          <button
-            v-else
-            class="rc-match-btn primary"
-            :disabled="busyLineIds.has(line.id)"
-            @click="pickingForLineId = line.id"
-          >Match…</button>
+
+          <div v-else-if="isActive(line.id, 'book')" class="rc-action-form">
+            <p class="rc-picker-title">Book as new transaction</p>
+            <div class="rc-form-grid">
+              <label>
+                <span>Vendor</span>
+                <input
+                  v-model="bookFormFor(line).vendor"
+                  type="text"
+                  placeholder="Who charged this?"
+                  :disabled="busyLineIds.has(line.id)"
+                />
+              </label>
+              <label>
+                <span>Category</span>
+                <select
+                  v-model="bookFormFor(line).category"
+                  :disabled="busyLineIds.has(line.id)"
+                >
+                  <option value="">— pick a category —</option>
+                  <option
+                    v-for="c in categories"
+                    :key="c.name"
+                    :value="c.name"
+                  >{{ c.name }}</option>
+                </select>
+              </label>
+              <label>
+                <span>Date</span>
+                <input
+                  v-model="bookFormFor(line).date"
+                  type="date"
+                  :disabled="busyLineIds.has(line.id)"
+                />
+              </label>
+              <label>
+                <span>Payment source</span>
+                <select
+                  v-model="bookFormFor(line).payment_source"
+                  :disabled="busyLineIds.has(line.id)"
+                >
+                  <option value="">— pick a source —</option>
+                  <option
+                    v-for="s in paymentSources"
+                    :key="s.name"
+                    :value="s.name"
+                  >{{ s.name }}</option>
+                </select>
+              </label>
+              <label class="span-2">
+                <span>Description</span>
+                <input
+                  v-model="bookFormFor(line).description"
+                  type="text"
+                  :disabled="busyLineIds.has(line.id)"
+                />
+              </label>
+              <label class="span-2">
+                <span>Notes</span>
+                <input
+                  v-model="bookFormFor(line).notes"
+                  type="text"
+                  placeholder="(optional)"
+                  :disabled="busyLineIds.has(line.id)"
+                />
+              </label>
+              <div class="span-2 rc-amount-readout">
+                Amount: <strong class="mono">{{ fmt(Math.abs(Number(line.amount)), view.statement.currency) }}</strong>
+                <span class="hint">(from statement line)</span>
+              </div>
+            </div>
+            <div class="rc-form-actions">
+              <button
+                class="primary"
+                :disabled="busyLineIds.has(line.id)"
+                @click="submitBook(line)"
+              >Book transaction</button>
+              <button class="ghost" @click="closeAction">Cancel</button>
+            </div>
+          </div>
+
+          <div v-else-if="isActive(line.id, 'transfer')" class="rc-action-form">
+            <p class="rc-picker-title">
+              Mark as transfer (money out of <code>{{ view.statement.source }}</code>)
+            </p>
+            <div class="rc-form-grid">
+              <label class="span-2">
+                <span>To account</span>
+                <select
+                  v-model="transferFormFor(line).other_source"
+                  :disabled="busyLineIds.has(line.id)"
+                >
+                  <option value="">— pick the receiving account —</option>
+                  <option
+                    v-for="s in paymentSources"
+                    :key="s.name"
+                    :value="s.name"
+                    :disabled="s.name === view.statement.source"
+                  >{{ s.name }}</option>
+                </select>
+              </label>
+              <label>
+                <span>Date</span>
+                <input
+                  v-model="transferFormFor(line).date"
+                  type="date"
+                  :disabled="busyLineIds.has(line.id)"
+                />
+              </label>
+              <label class="span-2">
+                <span>Description</span>
+                <input
+                  v-model="transferFormFor(line).description"
+                  type="text"
+                  :disabled="busyLineIds.has(line.id)"
+                />
+              </label>
+              <label class="span-2">
+                <span>Notes</span>
+                <input
+                  v-model="transferFormFor(line).notes"
+                  type="text"
+                  placeholder="(optional)"
+                  :disabled="busyLineIds.has(line.id)"
+                />
+              </label>
+              <div class="span-2 rc-amount-readout">
+                Amount: <strong class="mono">{{ fmt(Math.abs(Number(line.amount)), view.statement.currency) }}</strong>
+                <span class="hint">(from statement line)</span>
+              </div>
+            </div>
+            <div class="rc-form-actions">
+              <button
+                class="primary"
+                :disabled="busyLineIds.has(line.id)"
+                @click="submitTransfer(line)"
+              >Save transfer</button>
+              <button class="ghost" @click="closeAction">Cancel</button>
+            </div>
+          </div>
+
+          <div v-else class="rc-action-row">
+            <button
+              class="rc-match-btn primary"
+              :disabled="busyLineIds.has(line.id)"
+              @click="setAction(line.id, 'match')"
+            >Match…</button>
+            <button
+              class="ghost"
+              :disabled="busyLineIds.has(line.id)"
+              @click="setAction(line.id, 'book')"
+              title="Create a new GL row from this line (late fees, finance charges, anything that should hit the books)"
+            >Book as new…</button>
+            <button
+              class="ghost"
+              :disabled="busyLineIds.has(line.id)"
+              @click="setAction(line.id, 'transfer')"
+              title="Treat this as a transfer between two of your accounts"
+            >Mark as transfer…</button>
+          </div>
         </div>
       </div>
     </section>
 
-    <!-- Unmatched credits (no income side yet — informational) -->
+    <!-- Unmatched credits (income or transfer-in) -->
     <section v-if="view.unmatched_credits.length > 0" class="rc-section">
       <h4 class="rc-section-title muted">
         Deposits / credits ({{ view.unmatched_credits.length }})
-        <span class="hint">— income side of the books isn't built yet, so these can't auto-match</span>
+        <span class="hint">— mark transfers in; income matching isn't built yet</span>
       </h4>
       <div class="rc-line-list">
         <div
           v-for="line in view.unmatched_credits"
           :key="line.id"
-          class="rc-credit"
+          class="rc-unmatched"
+          :class="{ busy: busyLineIds.has(line.id) }"
         >
-          <span class="mono date">{{ shortDate(line.line_date) }}</span>
-          <span class="amount mono positive">{{ fmt(line.amount, view.statement.currency) }}</span>
-          <span class="rc-desc">{{ line.description }}</span>
+          <div class="rc-line side-line">
+            <div class="rc-line-head">
+              <span class="mono date">{{ shortDate(line.line_date) }}</span>
+              <span class="amount mono positive">{{ fmt(line.amount, view.statement.currency) }}</span>
+            </div>
+            <p class="rc-desc">{{ line.description }}</p>
+          </div>
+
+          <div v-if="isActive(line.id, 'transfer')" class="rc-action-form">
+            <p class="rc-picker-title">
+              Mark as transfer (money into <code>{{ view.statement.source }}</code>)
+            </p>
+            <div class="rc-form-grid">
+              <label class="span-2">
+                <span>From account</span>
+                <select
+                  v-model="transferFormFor(line).other_source"
+                  :disabled="busyLineIds.has(line.id)"
+                >
+                  <option value="">— pick the sending account —</option>
+                  <option
+                    v-for="s in paymentSources"
+                    :key="s.name"
+                    :value="s.name"
+                    :disabled="s.name === view.statement.source"
+                  >{{ s.name }}</option>
+                </select>
+              </label>
+              <label>
+                <span>Date</span>
+                <input
+                  v-model="transferFormFor(line).date"
+                  type="date"
+                  :disabled="busyLineIds.has(line.id)"
+                />
+              </label>
+              <label class="span-2">
+                <span>Description</span>
+                <input
+                  v-model="transferFormFor(line).description"
+                  type="text"
+                  :disabled="busyLineIds.has(line.id)"
+                />
+              </label>
+              <label class="span-2">
+                <span>Notes</span>
+                <input
+                  v-model="transferFormFor(line).notes"
+                  type="text"
+                  placeholder="(optional)"
+                  :disabled="busyLineIds.has(line.id)"
+                />
+              </label>
+              <div class="span-2 rc-amount-readout">
+                Amount: <strong class="mono">{{ fmt(Math.abs(Number(line.amount)), view.statement.currency) }}</strong>
+                <span class="hint">(from statement line)</span>
+              </div>
+            </div>
+            <div class="rc-form-actions">
+              <button
+                class="primary"
+                :disabled="busyLineIds.has(line.id)"
+                @click="submitTransfer(line)"
+              >Save transfer</button>
+              <button class="ghost" @click="closeAction">Cancel</button>
+            </div>
+          </div>
+
+          <div v-else class="rc-action-row">
+            <button
+              class="ghost"
+              :disabled="busyLineIds.has(line.id)"
+              @click="setAction(line.id, 'transfer')"
+              title="Treat this as a transfer between two of your accounts"
+            >Mark as transfer…</button>
+          </div>
         </div>
       </div>
     </section>
@@ -793,6 +1167,86 @@ const hasError = computed(() => view.value && typeof view.value.error === "strin
 .rc-picker-item.mismatch .rc-picker-btn {
   border-color: #fde68a;
   background: #fffdf5;
+}
+
+/* ── Action row (Match… / Book as new… / Mark as transfer…) ─────── */
+.rc-action-row {
+  display: flex;
+  gap: 0.4rem;
+  align-items: center;
+  flex-wrap: wrap;
+  align-self: center;
+}
+
+/* ── Inline Book / Mark-as-transfer form ────────────────────────── */
+.rc-action-form {
+  flex: 1 1 100%;
+  background: #fafaf5;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 0.6rem 0.7rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.55rem;
+}
+
+.rc-form-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.5rem 0.6rem;
+}
+
+.rc-form-grid label {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  font-size: 0.74rem;
+}
+
+.rc-form-grid label > span {
+  font-weight: 600;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  font-size: 0.65rem;
+}
+
+.rc-form-grid input,
+.rc-form-grid select {
+  font-size: 0.82rem;
+  padding: 0.32rem 0.45rem;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--surface);
+  color: var(--text);
+  width: 100%;
+}
+
+.rc-form-grid input:focus,
+.rc-form-grid select:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.rc-form-grid .span-2 {
+  grid-column: span 2;
+}
+
+.rc-amount-readout {
+  font-size: 0.78rem;
+  color: var(--text-muted);
+  padding: 0.25rem 0;
+}
+
+.rc-amount-readout .hint {
+  font-style: italic;
+  margin-left: 0.4rem;
+}
+
+.rc-form-actions {
+  display: flex;
+  gap: 0.5rem;
+  justify-content: flex-end;
 }
 
 /* ── Unmatched credits ─────────────────────────────────────────────── */

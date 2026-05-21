@@ -196,7 +196,8 @@ export const DEFAULT_CATEGORIES = [
   { name: "Marketing & Advertising", type: "expense", description: "", account_code: "", active: true },
   { name: "Postage & Shipping", type: "expense", description: "", account_code: "", active: true },
   { name: "Utilities", type: "expense", description: "", account_code: "", active: true },
-  { name: "Bank Fees", type: "expense", description: "", account_code: "", active: true },
+  { name: "Bank Fees", type: "expense", description: "Flat / punitive charges: late fees, NSF, wires, overdraft", account_code: "", active: true },
+  { name: "Interest Expense", type: "expense", description: "Finance charges on revolving card balances and loan interest", account_code: "", active: true },
   { name: "Other / Uncategorized", type: "expense", description: "", account_code: "", active: true },
 ];
 
