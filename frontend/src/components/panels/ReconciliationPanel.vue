@@ -82,22 +82,52 @@ async function unmatch(lineId) {
 }
 
 // Match-picker dropdown: when the user clicks "Match…" on an unmatched
-// line, show GL candidates ordered by amount proximity then date.
+// line, show GL candidates ordered by source match → amount → date. We
+// use the broader all_unreconciled_gl_in_period list so the picker still
+// works when the user hasn't normalized payment_source names to match
+// the statement's source (e.g. statement says "Mastercard ••9475" but
+// GL rows are tagged "Brex Card"). Source-matched rows sort to the top
+// and source-mismatched ones get a warning chip in the template.
 function candidatesForLine(line) {
   const targetAmount = Math.abs(Number(line.amount));
-  return [...view.value.unreconciled_gl]
+  const pool =
+    view.value.all_unreconciled_gl_in_period ?? view.value.unreconciled_gl;
+  return [...pool]
     .map((g) => ({
       ...g,
+      // Default source_matches=true preserves behavior for older payloads
+      // that don't include the flag (defense against version skew).
+      source_matches: g.source_matches !== false,
       _amount_diff: Math.abs(Number(g.amount) - targetAmount),
       _date_diff: g.date && line.line_date
         ? Math.abs(new Date(g.date) - new Date(line.line_date)) / 86400000
         : 999,
     }))
     .sort((a, b) => {
+      if (a.source_matches !== b.source_matches) {
+        return a.source_matches ? -1 : 1;
+      }
       if (a._amount_diff !== b._amount_diff) return a._amount_diff - b._amount_diff;
       return a._date_diff - b._date_diff;
     });
 }
+
+// Source-mismatch is the most common foot-gun on credit-card statements
+// — surface the diagnostic any time we have unmatched debits AND there
+// are GL rows in the period whose source doesn't agree with the
+// statement's source. The original "only when zero matched" rule hid
+// the diagnostic exactly when it was most useful (some GL rows happened
+// to match, masking that many others were silently filtered out).
+const shouldShowSourceDiagnostic = computed(() => {
+  const sd = view.value?.source_diagnostic;
+  if (!sd) return false;
+  if (!sd.gl_sources_not_matching || sd.gl_sources_not_matching.length === 0) {
+    return false;
+  }
+  const hasUnmatchedDebits = (view.value?.counts?.unmatched_debit ?? 0) > 0;
+  const noMatches = sd.gl_matched_count === 0;
+  return noMatches || hasUnmatchedDebits;
+});
 
 const statusPillClass = computed(() => {
   const s = view.value?.statement?.status;
@@ -154,12 +184,19 @@ const hasError = computed(() => view.value && typeof view.value.error === "strin
 
     <p v-if="pickingError" class="rc-error">{{ pickingError }}</p>
 
-    <!-- Source diagnostic — shown when nothing matched and there ARE GL rows -->
+    <!-- Source diagnostic — shown when source-name mismatch is likely
+         filtering candidates (always show when there are unmatched
+         debits and some GL rows use a different source name). -->
     <div
-      v-if="view.source_diagnostic && view.source_diagnostic.gl_matched_count === 0 && view.source_diagnostic.gl_sources_not_matching.length > 0"
+      v-if="shouldShowSourceDiagnostic"
       class="rc-diagnostic"
     >
-      <strong>No GL rows matched this statement's source.</strong>
+      <strong v-if="view.source_diagnostic.gl_matched_count === 0">
+        No GL rows matched this statement's source.
+      </strong>
+      <strong v-else>
+        Some GL rows in this period use a different source name than this statement.
+      </strong>
       The statement says
       <code>{{ view.source_diagnostic.statement_source }}</code>
       but the GL rows in this period use:
@@ -169,9 +206,12 @@ const hasError = computed(() => view.value && typeof view.value.error === "strin
           :key="s.name"
         ><code>{{ s.name }}</code> ({{ s.count }})</li>
       </ul>
-      Tip: open one of the GL rows on the timeline and rename its
+      Tip: open one of those GL rows on the timeline and rename its
       <em>Payment source</em> to match the statement (matching on the
-      last 4 of the account is enough). Then re-ask to reconcile.
+      last 4 of the account is enough). You can also still match them
+      here — mismatched rows are marked with a
+      <span class="src-warn-inline">different source</span> chip in the
+      picker below.
     </div>
 
     <!-- Matched -->
@@ -248,15 +288,15 @@ const hasError = computed(() => view.value && typeof view.value.error === "strin
           <div v-if="pickingForLineId === line.id" class="rc-picker">
             <p class="rc-picker-title">Match to which GL row?</p>
             <div
-              v-if="view.unreconciled_gl.length === 0"
+              v-if="candidatesForLine(line).length === 0"
               class="rc-picker-empty"
-            >No unreconciled GL rows in this source/period.</div>
+            >No unreconciled GL rows in this period.</div>
             <ul v-else class="rc-picker-list">
               <li
                 v-for="g in candidatesForLine(line)"
                 :key="g.id"
                 class="rc-picker-item"
-                :class="{ exact: g._amount_diff <= 0.01 }"
+                :class="{ exact: g._amount_diff <= 0.01, mismatch: !g.source_matches }"
               >
                 <button
                   class="rc-picker-btn"
@@ -266,7 +306,14 @@ const hasError = computed(() => view.value && typeof view.value.error === "strin
                   <span class="mono">{{ shortDate(g.date) }}</span>
                   <strong>{{ g.vendor || "—" }}</strong>
                   <span class="mono">{{ fmt(g.amount, g.currency) }}</span>
-                  <span v-if="g._amount_diff <= 0.01" class="exact-tag">exact</span>
+                  <span class="picker-tags">
+                    <span v-if="g._amount_diff <= 0.01" class="exact-tag">exact</span>
+                    <span
+                      v-if="!g.source_matches"
+                      class="src-warn-tag"
+                      :title="`GL payment_source is '${g.payment_source}' — doesn't match statement source '${view.statement.source}'`"
+                    >{{ g.payment_source || "no source" }}</span>
+                  </span>
                 </button>
               </li>
             </ul>
@@ -699,6 +746,13 @@ const hasError = computed(() => view.value && typeof view.value.error === "strin
   border-color: #bbf7d0;
 }
 
+.picker-tags {
+  display: inline-flex;
+  gap: 0.3rem;
+  align-items: center;
+  justify-self: end;
+}
+
 .exact-tag {
   font-size: 0.6rem;
   font-family: var(--font-mono);
@@ -708,6 +762,37 @@ const hasError = computed(() => view.value && typeof view.value.error === "strin
   padding: 1px 5px;
   border-radius: 3px;
   text-transform: uppercase;
+}
+
+.src-warn-tag {
+  font-size: 0.6rem;
+  font-family: var(--font-mono);
+  font-weight: 600;
+  color: #92400e;
+  background: #fffbeb;
+  border: 1px solid #fde68a;
+  padding: 0 5px;
+  border-radius: 3px;
+  max-width: 140px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.src-warn-inline {
+  font-size: 0.7rem;
+  font-family: var(--font-mono);
+  font-weight: 600;
+  color: #92400e;
+  background: #fffbeb;
+  border: 1px solid #fde68a;
+  padding: 0 5px;
+  border-radius: 3px;
+}
+
+.rc-picker-item.mismatch .rc-picker-btn {
+  border-color: #fde68a;
+  background: #fffdf5;
 }
 
 /* ── Unmatched credits ─────────────────────────────────────────────── */

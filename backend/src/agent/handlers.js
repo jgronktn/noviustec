@@ -228,9 +228,17 @@ export async function buildTimelineProps({ vendor = null, from, to } = {}) {
     ) {
       status = "overdue";
     }
+    // payment_kind="transfer" awaiting rows are card-balance obligations
+    // — the closing balance auto-created at statement import. They live
+    // on the left for now (it IS an obligation that needs settling), but
+    // get a distinct visual treatment in the frontend so they don't read
+    // as a vendor invoice.
+    const isTransferObligation = r.payment_kind === "transfer";
     leftEvents.push({
       id: r.id,
       kind: r.reference_kind || "invoice",
+      payment_kind: r.payment_kind || "expense",
+      is_transfer_obligation: isTransferObligation,
       date,
       amount: Math.round(Number(r.amount) * 100) / 100,
       currency: r.currency ?? "USD",
@@ -243,7 +251,8 @@ export async function buildTimelineProps({ vendor = null, from, to } = {}) {
           : new Date(r.paid_at).toISOString().slice(0, 10)
         : null,
       paid_txn_id: r.paid_txn_id ?? null,
-      link_id: r.paid_txn_id ?? null,
+      paid_transfer_id: r.paid_transfer_id ?? null,
+      link_id: r.paid_txn_id ?? r.paid_transfer_id ?? null,
       description: r.description ?? "",
       vendor: r.vendor,
       source: "awaiting",

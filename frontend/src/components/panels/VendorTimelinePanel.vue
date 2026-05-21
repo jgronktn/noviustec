@@ -113,11 +113,17 @@ function invStatusClass(status) {
   return `inv-${status}`;
 }
 
-function kindLabel(kind) {
+function kindLabel(ev) {
+  // Card-balance obligations (awaiting-transfer auto-created from a
+  // credit-card statement's closing balance) get their own label so they
+  // don't read as a vendor invoice.
+  if (ev && ev.is_transfer_obligation) return "Card balance";
+  const kind = typeof ev === "string" ? ev : ev?.kind;
   if (kind === "invoice") return "Invoice";
   if (kind === "receipt") return "Receipt";
   if (kind === "payment") return "Payment";
-  return kind.charAt(0).toUpperCase() + kind.slice(1);
+  if (kind === "statement") return "Statement";
+  return kind ? kind.charAt(0).toUpperCase() + kind.slice(1) : "—";
 }
 
 // Interleave month boundary ticks between data rows so a small horizontal
@@ -248,11 +254,12 @@ const monthGroups = computed(() => {
                 invStatusClass(effectiveStatus(ev)),
                 { 'vt-card-clickable': isCardInteractive(ev) },
                 { 'vt-card-linked': isLinkedActive(ev) },
+                { 'vt-card-transfer': ev.is_transfer_obligation },
               ]"
               :title="canEdit(ev) ? 'Click to edit' : (ev.description || '')"
               @click="handleCardClick(ev)"
             >
-              <span class="vt-card-kind">{{ kindLabel(ev.kind) }}</span>
+              <span class="vt-card-kind">{{ kindLabel(ev) }}</span>
               <span v-if="data.is_global" class="vt-card-vendor">{{ ev.vendor }}</span>
               <span v-if="ev.reference_number" class="vt-card-ref">
                 {{ ev.reference_number }}
@@ -285,7 +292,7 @@ const monthGroups = computed(() => {
               :title="canEdit(ev) ? 'Click to edit' : (ev.description || '')"
               @click="handleCardClick(ev)"
             >
-              <span class="vt-card-kind">{{ kindLabel(ev.kind) }}</span>
+              <span class="vt-card-kind">{{ kindLabel(ev) }}</span>
               <span v-if="data.is_global" class="vt-card-vendor">{{ ev.vendor }}</span>
               <span v-if="ev.payment_source" class="vt-card-source">
                 {{ ev.payment_source }}
@@ -636,6 +643,21 @@ const monthGroups = computed(() => {
   background: #f8f8f4;
   border-color: #e5e7eb;
   opacity: 0.55;
+}
+
+/* Card-balance obligation (awaiting-transfer from a card statement).
+   Distinct purple treatment so it doesn't read as a vendor invoice —
+   wins over the inv-* state colors above (specificity tie, source-order
+   precedence). When paid/written-off, the inv-* styles take over so
+   the card visibly settles. */
+.vt-card-left.vt-card-transfer.inv-awaiting,
+.vt-card-left.vt-card-transfer.inv-overdue {
+  background: #f5f3ff;
+  border-color: #c4b5fd;
+  color: var(--text);
+}
+.vt-card-left.vt-card-transfer .vt-card-kind {
+  color: #6d28d9;
 }
 
 .vt-card-right {

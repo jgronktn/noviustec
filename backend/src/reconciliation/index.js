@@ -417,6 +417,19 @@ export async function buildReconciliationView(statementId) {
     .map(scrubGlMinimal)
     .sort((a, b) => (b.date ?? "").localeCompare(a.date ?? ""));
 
+  // Broader picker pool: every unmatched GL row in the period regardless
+  // of payment_source. Each tagged with source_matches so the UI can
+  // sort/warn appropriately. Needed when a card statement's source name
+  // doesn't agree with how the GL rows were tagged (very common before
+  // the user has normalized last-4 conventions across imports).
+  const allUnreconciledGlInPeriod = allGl
+    .filter((g) => !matchedTxnIds.has(g.id))
+    .map((g) => ({
+      ...scrubGlMinimal(g),
+      source_matches: sourceMatches(stmt.source, g.payment_source),
+    }))
+    .sort((a, b) => (b.date ?? "").localeCompare(a.date ?? ""));
+
   const unreconciledTransfers = candidateTransfers
     .filter((t) => !matchedTransferIds.has(t.id))
     .map(scrubTransferMinimal)
@@ -472,6 +485,7 @@ export async function buildReconciliationView(statementId) {
     unmatched_debits: unmatchedDebits,
     unmatched_credits: unmatchedCredits,
     unreconciled_gl: unreconciledGl,
+    all_unreconciled_gl_in_period: allUnreconciledGlInPeriod,
     unreconciled_transfers: unreconciledTransfers,
     payments_diagnostic,
     source_diagnostic: {
