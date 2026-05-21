@@ -1156,17 +1156,25 @@ export async function runTool(name, input) {
         const m = String(s).match(/(?:••?|\*\*|-)\s*(\d{4})\b/);
         return m ? m[1] : null;
       };
+      // Only treat explicit "credit_card" / "bank_account" from the
+      // Sources sheet as authoritative. "other" and "cash" don't help
+      // us decide which timeline side to use (and "other" is the
+      // ensurePaymentSource default for sources that aren't tagged
+      // yet) — fall through to the name heuristic in those cases.
+      const SPECIFIC_KINDS = new Set(["credit_card", "bank_account"]);
       function resolveSourceKind(stmt) {
-        if (stmt.source_kind) return stmt.source_kind;
+        if (SPECIFIC_KINDS.has(stmt.source_kind)) return stmt.source_kind;
         const exact = sources.find((s) => s.name === stmt.source);
-        if (exact?.type) return exact.type;
+        if (exact?.type && SPECIFIC_KINDS.has(exact.type)) return exact.type;
         const stmtLast4 = last4(stmt.source);
         if (stmtLast4) {
           const byLast4 = sources.find(
-            (s) => last4(s.name) === stmtLast4 && s.type,
+            (s) => last4(s.name) === stmtLast4 && SPECIFIC_KINDS.has(s.type),
           );
           if (byLast4?.type) return byLast4.type;
         }
+        // Name heuristic — banks announce themselves clearly; otherwise
+        // anything with a last-4 marker or card-issuer keyword is a card.
         const lower = String(stmt.source || "").toLowerCase();
         if (/\b(banking|bank account|checking|savings)\b/.test(lower)) {
           return "bank_account";
