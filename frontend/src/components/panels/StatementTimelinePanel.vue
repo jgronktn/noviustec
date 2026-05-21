@@ -123,31 +123,67 @@ const items = computed(() => {
           <span class="st-today-date">{{ shortDate(item.date) }}</span>
         </div>
         <div v-else class="st-row">
+          <!-- Card statements live on the left, bank statements on the
+               right. The center axis (date + dot) separates them, same
+               as the vendor timeline. -->
+          <div class="st-side st-left">
+            <div
+              v-if="item.statement.source_kind === 'credit_card'"
+              class="st-card kind-card"
+            >
+              <span class="st-card-kind">{{ kindLabel(item.statement.source_kind) }}</span>
+              <span class="st-card-source">{{ item.statement.source }}</span>
+              <span class="st-card-period mono">
+                {{ shortDate(item.statement.period_start) }} →
+                {{ shortDate(item.statement.period_end) }}
+              </span>
+              <span class="st-card-amount mono">
+                {{ fmt(item.statement.closing_balance, item.statement.currency) }}
+              </span>
+              <span class="status-pill" :class="statusClass(item.statement.status)">
+                {{ (item.statement.status || "imported").replace(/_/g, " ") }}
+              </span>
+              <a
+                v-if="item.statement.download_path"
+                :href="item.statement.download_path"
+                target="_blank"
+                rel="noopener"
+                class="st-link"
+                title="Download original PDF"
+              >PDF</a>
+            </div>
+          </div>
           <div class="st-axis">
             <div class="st-dot" :class="kindClass(item.statement.source_kind)" />
             <span class="st-date mono">{{ shortDate(item.statement.statement_date) }}</span>
           </div>
-          <div class="st-card" :class="kindClass(item.statement.source_kind)">
-            <span class="st-card-kind">{{ kindLabel(item.statement.source_kind) }}</span>
-            <span class="st-card-source">{{ item.statement.source }}</span>
-            <span class="st-card-period mono">
-              {{ shortDate(item.statement.period_start) }} →
-              {{ shortDate(item.statement.period_end) }}
-            </span>
-            <span class="st-card-amount mono">
-              {{ fmt(item.statement.closing_balance, item.statement.currency) }}
-            </span>
-            <span class="status-pill" :class="statusClass(item.statement.status)">
-              {{ (item.statement.status || "imported").replace(/_/g, " ") }}
-            </span>
-            <a
-              v-if="item.statement.download_path"
-              :href="item.statement.download_path"
-              target="_blank"
-              rel="noopener"
-              class="st-link"
-              title="Download original PDF"
-            >PDF</a>
+          <div class="st-side st-right">
+            <div
+              v-if="item.statement.source_kind !== 'credit_card'"
+              class="st-card"
+              :class="kindClass(item.statement.source_kind)"
+            >
+              <span class="st-card-kind">{{ kindLabel(item.statement.source_kind) }}</span>
+              <span class="st-card-source">{{ item.statement.source }}</span>
+              <span class="st-card-period mono">
+                {{ shortDate(item.statement.period_start) }} →
+                {{ shortDate(item.statement.period_end) }}
+              </span>
+              <span class="st-card-amount mono">
+                {{ fmt(item.statement.closing_balance, item.statement.currency) }}
+              </span>
+              <span class="status-pill" :class="statusClass(item.statement.status)">
+                {{ (item.statement.status || "imported").replace(/_/g, " ") }}
+              </span>
+              <a
+                v-if="item.statement.download_path"
+                :href="item.statement.download_path"
+                target="_blank"
+                rel="noopener"
+                class="st-link"
+                title="Download original PDF"
+              >PDF</a>
+            </div>
           </div>
         </div>
       </template>
@@ -223,44 +259,62 @@ const items = computed(() => {
   gap: 0.5rem;
 }
 
+/* Center spine — runs through the middle, separating card statements
+   (left) from bank statements (right). */
 .st-timeline::before {
   content: "";
   position: absolute;
   top: 0;
   bottom: 0;
-  left: 110px;
+  left: 50%;
   width: 2px;
   background: var(--border);
+  transform: translateX(-50%);
 }
 
 .st-row {
   position: relative;
   display: grid;
-  grid-template-columns: 110px 1fr;
+  grid-template-columns: 1fr 120px 1fr;
   align-items: center;
   gap: 0.5rem;
   min-height: 36px;
 }
 
+.st-side {
+  display: flex;
+  min-width: 0;
+}
+
+.st-side.st-left {
+  justify-content: flex-end;
+}
+
+.st-side.st-right {
+  justify-content: flex-start;
+}
+
 .st-axis {
-  position: relative;
   display: flex;
   flex-direction: column;
-  align-items: flex-end;
-  padding-right: 12px;
+  align-items: center;
+  gap: 0.15rem;
+  position: relative;
+  z-index: 2;
 }
 
 .st-dot {
-  position: absolute;
-  right: -5px;
-  top: 50%;
-  transform: translateY(-50%);
   width: 10px;
   height: 10px;
   border-radius: 50%;
   background: var(--text-muted);
   border: 2px solid var(--surface);
-  z-index: 1;
+}
+
+.st-axis .st-date {
+  background: var(--bg);
+  padding: 0 4px;
+  white-space: nowrap;
 }
 
 .st-dot.kind-card {
@@ -276,41 +330,44 @@ const items = computed(() => {
   color: var(--text-muted);
 }
 
-/* Month + today markers */
+/* Month + today markers — span the full timeline width and sit on the
+   center spine so they read as horizontal dividers between rows. */
 .st-month-tick {
-  display: grid;
-  grid-template-columns: 110px 1fr;
-  align-items: center;
-  gap: 0.5rem;
-  padding-top: 0.4rem;
+  position: relative;
+  display: flex;
+  justify-content: center;
+  padding: 0.25rem 0;
+  z-index: 2;
 }
 
 .st-month-label {
   font-size: 0.7rem;
   font-weight: 700;
-  letter-spacing: 0.04em;
+  letter-spacing: 0.05em;
   color: var(--text-muted);
   text-transform: uppercase;
-  text-align: right;
-  padding-right: 18px;
+  background: var(--bg);
+  padding: 0 8px;
 }
 
 .st-today {
   position: relative;
-  display: grid;
-  grid-template-columns: 110px 1fr;
+  display: flex;
+  justify-content: center;
   align-items: center;
-  gap: 0.5rem;
-  padding: 0.2rem 0;
+  gap: 0.4rem;
+  padding: 0.25rem 0;
+  z-index: 2;
 }
 
 .st-today::after {
   content: "";
   position: absolute;
-  left: 105px;
+  left: 0;
   right: 0;
   top: 50%;
   border-top: 1px dashed var(--danger);
+  z-index: -1;
 }
 
 .st-today-word {
@@ -318,23 +375,16 @@ const items = computed(() => {
   font-weight: 700;
   letter-spacing: 0.05em;
   color: var(--danger);
-  text-align: right;
-  padding-right: 18px;
-  background: var(--surface);
-  position: relative;
-  z-index: 1;
+  background: var(--bg);
+  padding: 0 6px;
 }
 
 .st-today-date {
   font-size: 0.7rem;
   color: var(--danger);
   font-family: var(--font-mono);
-  padding-left: 14px;
-  background: var(--surface);
-  position: relative;
-  z-index: 1;
-  align-self: center;
-  justify-self: start;
+  background: var(--bg);
+  padding: 0 6px;
 }
 
 /* ── Card ──────────────────────────────────────────────────────── */
