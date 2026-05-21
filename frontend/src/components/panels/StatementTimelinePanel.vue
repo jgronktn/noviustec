@@ -128,44 +128,26 @@ const items = computed(() => {
             <span class="st-date mono">{{ shortDate(item.statement.statement_date) }}</span>
           </div>
           <div class="st-card" :class="kindClass(item.statement.source_kind)">
-            <div class="st-card-head">
-              <span class="st-card-kind">{{ kindLabel(item.statement.source_kind) }}</span>
-              <span class="st-card-source">{{ item.statement.source }}</span>
-              <span class="status-pill mono" :class="statusClass(item.statement.status)">
-                {{ (item.statement.status || "imported").replace(/_/g, " ") }}
-              </span>
-            </div>
-            <p class="st-card-period mono">
+            <span class="st-card-kind">{{ kindLabel(item.statement.source_kind) }}</span>
+            <span class="st-card-source">{{ item.statement.source }}</span>
+            <span class="st-card-period mono">
               {{ shortDate(item.statement.period_start) }} →
               {{ shortDate(item.statement.period_end) }}
-              · {{ item.statement.line_count }} line<span v-if="item.statement.line_count !== 1">s</span>
-            </p>
-            <div class="st-card-balances">
-              <div class="st-balance">
-                <span class="st-balance-label">Opening</span>
-                <span class="mono">{{ fmt(item.statement.opening_balance, item.statement.currency) }}</span>
-              </div>
-              <div class="st-balance st-balance-primary">
-                <span class="st-balance-label">Closing</span>
-                <span class="mono">{{ fmt(item.statement.closing_balance, item.statement.currency) }}</span>
-              </div>
-              <div class="st-balance">
-                <span class="st-balance-label">Charges</span>
-                <span class="mono negative">{{ fmt(item.statement.total_charges, item.statement.currency) }}</span>
-              </div>
-              <div class="st-balance">
-                <span class="st-balance-label">Payments</span>
-                <span class="mono positive">{{ fmt(item.statement.total_payments, item.statement.currency) }}</span>
-              </div>
-            </div>
-            <div v-if="item.statement.download_path" class="st-card-actions">
-              <a
-                :href="item.statement.download_path"
-                target="_blank"
-                rel="noopener"
-                class="st-link"
-              >Download PDF</a>
-            </div>
+            </span>
+            <span class="st-card-amount mono">
+              {{ fmt(item.statement.closing_balance, item.statement.currency) }}
+            </span>
+            <span class="status-pill" :class="statusClass(item.statement.status)">
+              {{ (item.statement.status || "imported").replace(/_/g, " ") }}
+            </span>
+            <a
+              v-if="item.statement.download_path"
+              :href="item.statement.download_path"
+              target="_blank"
+              rel="noopener"
+              class="st-link"
+              title="Download original PDF"
+            >PDF</a>
           </div>
         </div>
       </template>
@@ -255,9 +237,9 @@ const items = computed(() => {
   position: relative;
   display: grid;
   grid-template-columns: 110px 1fr;
-  align-items: stretch;
+  align-items: center;
   gap: 0.5rem;
-  min-height: 70px;
+  min-height: 36px;
 }
 
 .st-axis {
@@ -266,15 +248,15 @@ const items = computed(() => {
   flex-direction: column;
   align-items: flex-end;
   padding-right: 12px;
-  padding-top: 12px;
 }
 
 .st-dot {
   position: absolute;
   right: -5px;
-  top: 14px;
-  width: 12px;
-  height: 12px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 10px;
+  height: 10px;
   border-radius: 50%;
   background: var(--text-muted);
   border: 2px solid var(--surface);
@@ -356,15 +338,19 @@ const items = computed(() => {
 }
 
 /* ── Card ──────────────────────────────────────────────────────── */
+/* Sized to match the vendor-timeline card scale: single horizontal row,
+   ~0.78rem text, ~0.5rem padding, all key info on one line. */
 .st-card {
   background: var(--surface);
   border: 1px solid var(--border);
   border-left-width: 3px;
   border-radius: var(--radius);
-  padding: 0.55rem 0.75rem;
+  padding: 0.35rem 0.55rem;
   display: flex;
-  flex-direction: column;
-  gap: 0.35rem;
+  align-items: center;
+  gap: 0.55rem;
+  font-size: 0.78rem;
+  min-width: 0;
 }
 
 .st-card.kind-card {
@@ -377,19 +363,13 @@ const items = computed(() => {
   background: #eff6ff;
 }
 
-.st-card-head {
-  display: flex;
-  align-items: baseline;
-  gap: 0.5rem;
-  flex-wrap: wrap;
-}
-
 .st-card-kind {
   font-size: 0.6rem;
   text-transform: uppercase;
-  letter-spacing: 0.05em;
+  letter-spacing: 0.06em;
   font-weight: 700;
   color: var(--text-muted);
+  flex-shrink: 0;
 }
 
 .st-card.kind-card .st-card-kind {
@@ -402,7 +382,6 @@ const items = computed(() => {
 
 .st-card-source {
   font-weight: 600;
-  font-size: 0.88rem;
   flex: 1 1 auto;
   min-width: 0;
   overflow: hidden;
@@ -411,63 +390,28 @@ const items = computed(() => {
 }
 
 .st-card-period {
-  margin: 0;
   font-size: 0.72rem;
   color: var(--text-muted);
+  flex-shrink: 0;
 }
 
-.st-card-balances {
-  display: grid;
-  grid-template-columns: repeat(4, 1fr);
-  gap: 0.5rem;
-  padding-top: 0.25rem;
-}
-
-.st-balance {
-  display: flex;
-  flex-direction: column;
-  gap: 1px;
-}
-
-.st-balance-label {
-  font-size: 0.6rem;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-  color: var(--text-muted);
+.st-card-amount {
   font-weight: 600;
-}
-
-.st-balance .mono {
-  font-size: 0.82rem;
-  font-weight: 600;
-}
-
-.st-balance-primary .mono {
-  font-size: 0.92rem;
+  flex-shrink: 0;
 }
 
 .mono {
   font-family: var(--font-mono);
 }
 
-.mono.negative {
-  color: var(--danger);
-}
-
-.mono.positive {
-  color: var(--ok);
-}
-
-.st-card-actions {
-  display: flex;
-  gap: 0.6rem;
-  padding-top: 0.25rem;
-}
-
 .st-link {
-  font-size: 0.75rem;
+  font-size: 0.7rem;
+  font-weight: 600;
   color: var(--accent);
   text-decoration: none;
+  flex-shrink: 0;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
 }
 
 .st-link:hover {
@@ -477,12 +421,15 @@ const items = computed(() => {
 /* Status pills (reuse vendor-timeline patterns) */
 .status-pill {
   display: inline-block;
-  padding: 1px 8px;
+  padding: 1px 7px;
   border-radius: 10px;
   font-size: 0.6rem;
   font-weight: 700;
   text-transform: uppercase;
   letter-spacing: 0.04em;
+  font-family: var(--font-mono);
+  flex-shrink: 0;
+  white-space: nowrap;
 }
 
 .status-pill.status-imported {
@@ -510,8 +457,11 @@ const items = computed(() => {
 }
 
 @media (max-width: 720px) {
-  .st-card-balances {
-    grid-template-columns: 1fr 1fr;
+  .st-card {
+    flex-wrap: wrap;
+  }
+  .st-card-period {
+    flex-basis: 100%;
   }
 }
 </style>
