@@ -177,6 +177,16 @@ export async function buildTimelineProps({ vendor = null, from, to } = {}) {
   // ship an invoice PDF and a receipt PDF together — both belong on the
   // timeline as separate events tied to the same payment.
   const docsAll = await listDocuments();
+  // Pre-fetch every StatementLine so right-side payment cards can show a
+  // green check when reconciled against a statement (card or bank). A GL
+  // txn is "statement-matched" iff at least one StatementLine.matched_txn_id
+  // points at it. Cheap to load — used to drive a UI tick, not for matching.
+  const statementLinesAll = await listStatementLines();
+  const txnIdsMatchedOnStatement = new Set(
+    statementLinesAll
+      .filter((l) => l.matched_txn_id)
+      .map((l) => l.matched_txn_id),
+  );
   // Group docs by their GL transaction id. Skip docs that are ALSO tied to
   // an AwaitingPayment row: those already get a left card from the awaiting
   // side (drawn on the invoice's date, not the payment date), and we don't
@@ -331,6 +341,7 @@ export async function buildTimelineProps({ vendor = null, from, to } = {}) {
     payment_source: r.payment_source ?? null,
     vendor: r.vendor,
     link_id: r.id,
+    statement_matched: txnIdsMatchedOnStatement.has(r.id),
   }));
 
   const dateSet = new Set([

@@ -299,6 +299,11 @@ const monthGroups = computed(() => {
               </span>
               <span class="vt-card-amount">{{ fmt(ev.amount, ev.currency) }}</span>
               <span v-if="ev.category" class="vt-card-cat">{{ ev.category }}</span>
+              <span
+                v-if="ev.statement_matched"
+                class="vt-card-stmt-check"
+                title="Reconciled against a statement line"
+              >✓</span>
             </div>
           </div>
         </div>
@@ -706,6 +711,14 @@ const monthGroups = computed(() => {
   font-size: 0.7rem;
   color: var(--warn);
   flex-shrink: 0;
+}
+
+.vt-card-stmt-check {
+  font-size: 0.9rem;
+  font-weight: 700;
+  color: var(--ok);
+  flex-shrink: 0;
+  line-height: 1;
 }
 
 .inv-overdue .vt-card-age {
