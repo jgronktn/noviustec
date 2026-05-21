@@ -69,7 +69,11 @@ function findUniqueSubsetSummingTo(items, target, tolerance = 0.01) {
 }
 
 const transfers = await listTransfers();
-const awaitings = await listAwaiting({ status: "awaiting" });
+// Scan ALL statuses, not just "awaiting" — the original carry-forward
+// logic in statement import wrote off prior balances without checking
+// whether they'd been settled by a transfer first, so many "written_off"
+// rows are actually paid in fact.
+const awaitings = await listAwaiting({ status: "all" });
 const allStatements = await listStatements({ status: "all" });
 
 const unlinkedTransfers = transfers.filter((t) => !t.awaiting_id);
@@ -97,10 +101,17 @@ function findNextStatementForAwaiting(aw) {
   return after[0] ?? null;
 }
 
+// Eligible awaitings: transfer-kind, no settling transfer yet linked,
+// status NOT "paid" (already-paid means it's already showing the
+// correct state). We DO include "written_off" because those were
+// auto-marked at carry-forward time without checking if they'd been
+// paid first.
 const awaitingsSorted = [...awaitings]
   .filter(
     (aw) =>
-      (aw.payment_kind || "expense") === "transfer" && !aw.paid_transfer_id,
+      (aw.payment_kind || "expense") === "transfer" &&
+      !aw.paid_transfer_id &&
+      aw.status !== "paid",
   )
   .sort((a, b) => Number(a.amount) - Number(b.amount));
 
@@ -171,9 +182,81 @@ for (const aw of awaitingsSorted) {
   linkedOverpayments++;
 }
 
-// Pass 2: show the orphans the script left behind, with diagnostic
-// hints so the user can decide whether the data is legitimately
-// unmatched (e.g. payments toward a now-superseded older statement).
+// ── Pass 3: carry-forward chain settlement ──────────────────────────
+// A written_off awaiting whose chain terminates in a paid awaiting
+// was effectively paid (the unpaid leftover was carried into the next
+// statement, eventually paid). Propagate the chain's settling transfer
+// down to the original written_off awaiting and flip its status to
+// paid, with a note explaining the chain.
+//
+// The "Carries forward: <oldId>" annotation lives on the NEW awaiting
+// (set at carry-forward time). Build a forward chain map: oldId → newId.
+//
+// Re-read state after pass 1/2 so we see the freshly-paid awaitings.
+const refreshedAwaitings = await listAwaiting({ status: "all" });
+const chainMap = new Map(); // oldId → newId (which awaiting carries it)
+for (const aw of refreshedAwaitings) {
+  const notes = String(aw.notes || "");
+  // Tolerate single-id or comma-separated lists.
+  const m = notes.match(/Carries forward:\s*([\w_,\s]+)/);
+  if (!m) continue;
+  const carriedIds = m[1]
+    .split(",")
+    .map((s) => s.trim())
+    .filter((s) => /^apw_/.test(s));
+  for (const oldId of carriedIds) chainMap.set(oldId, aw.id);
+}
+
+function walkChainToPaid(startId) {
+  const visited = new Set();
+  let current = startId;
+  const path = [];
+  while (!visited.has(current)) {
+    visited.add(current);
+    const aw = refreshedAwaitings.find((a) => a.id === current);
+    if (!aw) return null;
+    path.push(aw);
+    if (aw.status === "paid" && aw.paid_transfer_id) {
+      return { terminalAwaiting: aw, path };
+    }
+    const next = chainMap.get(current);
+    if (!next) return null;
+    current = next;
+  }
+  return null;
+}
+
+let chainLinked = 0;
+const chainCandidates = refreshedAwaitings.filter(
+  (aw) =>
+    aw.status === "written_off" &&
+    (aw.payment_kind || "expense") === "transfer" &&
+    !aw.paid_transfer_id,
+);
+for (const aw of chainCandidates) {
+  const result = walkChainToPaid(aw.id);
+  if (!result) continue;
+  const { terminalAwaiting, path } = result;
+  console.log(
+    `  chain settle: ${aw.id} ($${aw.amount}, ${aw.vendor}) → carried forward through ${path.length - 1} statement(s) → settled by ${terminalAwaiting.paid_transfer_id} via ${terminalAwaiting.id}`,
+  );
+  if (!DRY_RUN) {
+    const existingNotes = aw.notes || "";
+    const chainNote = `Paid via carry-forward chain — settled when ${terminalAwaiting.id} was paid by xfer ${terminalAwaiting.paid_transfer_id}.`;
+    const combinedNotes = existingNotes
+      ? `${existingNotes}\n${chainNote}`
+      : chainNote;
+    await updateAwaiting(aw.id, { notes: combinedNotes });
+    await markAwaitingPaid(aw.id, {
+      paid_transfer_id: terminalAwaiting.paid_transfer_id,
+    });
+  }
+  chainLinked++;
+}
+
+// Pass 4 (was pass 2): show the orphans the script left behind, with
+// diagnostic hints so the user can decide whether the data is legitimately
+// unmatched.
 const remaining = unlinkedTransfers.filter((t) => !usedTransferIds.has(t.id));
 for (const t of remaining) {
   const amount = Math.abs(Number(t.amount));
@@ -198,4 +281,5 @@ console.log(
 );
 console.log(`  of which overpay:    ${linkedOverpayments}`);
 console.log(`Linked transfers:      ${linkedTransfersCount}`);
+console.log(`Chain settlements:     ${chainLinked}`);
 console.log(`Still unlinked:        ${remaining.length}`);
