@@ -1409,6 +1409,11 @@ export async function runTool(name, input) {
               as_of: today,
               transfer_obligation_count: leftEvents.length,
               transfer_count: 0,
+              // The Invoices&Receipts / Payments framing doesn't apply
+              // to this view (card balances aren't vendor invoices and
+              // bank statements aren't payments) — tell the panel to
+              // skip the side-totals row above the timeline.
+              hide_side_totals: true,
             },
           },
         },

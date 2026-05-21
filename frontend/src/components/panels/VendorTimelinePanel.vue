@@ -203,8 +203,11 @@ const monthGroups = computed(() => {
     </div>
 
     <div v-else class="vt-timeline">
-      <!-- Per-side running totals, pinned above the top month tag. -->
-      <div class="vt-totals">
+      <!-- Per-side running totals, pinned above the top month tag.
+           The statement_timeline view suppresses these because the
+           Invoices/Payments framing doesn't apply to card balances
+           and bank statements. -->
+      <div v-if="!data.summary?.hide_side_totals" class="vt-totals">
         <div class="vt-side vt-left">
           <div class="vt-total vt-total-left">
             <span class="vt-total-label">Invoices &amp; Receipts</span>
