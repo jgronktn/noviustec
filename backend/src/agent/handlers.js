@@ -1135,6 +1135,128 @@ export async function runTool(name, input) {
       };
     }
 
+    case "show_statement_timeline": {
+      const sourceKindFilter = args.source_kind ?? "all";
+      let rows = await listStatements({ status: "all" });
+      if (sourceKindFilter !== "all") {
+        rows = rows.filter((r) => r.source_kind === sourceKindFilter);
+      }
+      if (args.source) rows = rows.filter((r) => r.source === args.source);
+      if (args.from) {
+        rows = rows.filter((r) => {
+          const d = isoDate(r.statement_date);
+          return d && d >= args.from;
+        });
+      }
+      if (args.to) {
+        rows = rows.filter((r) => {
+          const d = isoDate(r.statement_date);
+          return d && d <= args.to;
+        });
+      }
+
+      // Line counts in one pass.
+      const allLines = await listStatementLines();
+      const linesByStatement = new Map();
+      for (const ln of allLines) {
+        const k = ln.statement_id;
+        linesByStatement.set(k, (linesByStatement.get(k) ?? 0) + 1);
+      }
+
+      const statements = rows
+        .map((r) => ({
+          id: r.id,
+          status: r.status,
+          source: r.source,
+          source_kind: r.source_kind ?? null,
+          period_start: isoDate(r.period_start),
+          period_end: isoDate(r.period_end),
+          statement_date: isoDate(r.statement_date),
+          currency: r.currency ?? "USD",
+          opening_balance:
+            r.opening_balance == null ? null : Number(r.opening_balance),
+          closing_balance:
+            r.closing_balance == null ? null : Number(r.closing_balance),
+          total_charges:
+            r.total_charges == null ? null : Number(r.total_charges),
+          total_payments:
+            r.total_payments == null ? null : Number(r.total_payments),
+          line_count: linesByStatement.get(r.id) ?? 0,
+          document_path: r.document_path ?? null,
+          download_path: r.document_path
+            ? `/api/documents/statement/${encodeURIComponent(r.id)}`
+            : null,
+          original_filename: r.original_filename ?? null,
+          notes: r.notes ?? "",
+        }))
+        .sort((a, b) =>
+          (b.statement_date ?? "").localeCompare(a.statement_date ?? ""),
+        );
+
+      const totals = statements.reduce(
+        (acc, s) => {
+          acc.charges += Number(s.total_charges) || 0;
+          acc.payments += Number(s.total_payments) || 0;
+          return acc;
+        },
+        { charges: 0, payments: 0 },
+      );
+      totals.charges = Math.round(totals.charges * 100) / 100;
+      totals.payments = Math.round(totals.payments * 100) / 100;
+
+      const counts = statements.reduce(
+        (acc, s) => {
+          acc.by_status[s.status] = (acc.by_status[s.status] ?? 0) + 1;
+          const k = s.source_kind || "unknown";
+          acc.by_kind[k] = (acc.by_kind[k] ?? 0) + 1;
+          return acc;
+        },
+        { by_status: {}, by_kind: {} },
+      );
+
+      const filterParts = [];
+      if (sourceKindFilter !== "all") filterParts.push(`kind=${sourceKindFilter}`);
+      if (args.source) filterParts.push(`source=${args.source}`);
+      if (args.from) filterParts.push(`from ${args.from}`);
+      if (args.to) filterParts.push(`through ${args.to}`);
+      const filterDesc = filterParts.join(" · ");
+      const title =
+        args.title ??
+        (filterDesc ? `Statement activity · ${filterDesc}` : "Statement activity");
+
+      // Slim per-statement summary for the agent (with ids so follow-up
+      // calls like show_reconciliation or read_statement can reference).
+      const agentEntries = statements.slice(0, 50).map((e) => ({
+        id: e.id,
+        source: e.source,
+        source_kind: e.source_kind,
+        statement_date: e.statement_date,
+        period_start: e.period_start,
+        period_end: e.period_end,
+        status: e.status,
+        closing_balance: e.closing_balance,
+        line_count: e.line_count,
+      }));
+
+      return {
+        __panel: {
+          kind: "statement_timeline",
+          title,
+          props: {
+            count: statements.length,
+            counts,
+            totals,
+            period: { from: args.from ?? null, to: args.to ?? null },
+            statements,
+          },
+        },
+        count: statements.length,
+        counts,
+        totals,
+        entries: agentEntries,
+      };
+    }
+
     case "show_inbox_list": {
       const status = args.status ?? "all";
       const rows = await listPending({ status });

@@ -36,6 +36,7 @@ There are "show_*" tools that push a typed visual panel into the dashboard canva
 - "Show the inbox" / "show all items received" / "show emails received" / "what's come in" / "list everything we've gotten" → show_inbox_list (covers all statuses: pending, approved, rejected)
 - "Show me all files" / "show all invoice files" / "show all receipt files" / "show me the ledger file" / "let me download X" → show_file_list (use kind="invoice", kind="receipt", kind="ledger", etc. as appropriate; default kind="all")
 - "Show bank statements" / "show credit card statements" / "what statements have I uploaded" / "show the statements" → show_statements_list (this is the Statements sheet — distinct from show_file_list which is the document archive)
+- "Show statement activity" / "statements on the timeline" / "show me the bank and card statements on the timeline" / "statement timeline" → show_statement_timeline (a chronological timeline view of statements only — distinct from show_statements_list which is a flat table, and from show_vendor_timeline which mixes invoices and payments)
 - "Reconcile <statement / bank>" / "match the statement to my books" / "why don't my statement and books match" / "show reconciliation" → show_reconciliation (runs auto-match against unmatched lines, then shows matched pairs + unmatched lines + unreconciled GL rows side-by-side)
 
 # IDs flow back from list tools

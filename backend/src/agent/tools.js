@@ -354,6 +354,37 @@ export const TOOL_DEFINITIONS = [
     },
   },
   {
+    name: "show_statement_timeline",
+    description:
+      "Render a chronological timeline of bank and credit-card statements — no invoices, no receipts, no GL payments, just statements. Each card shows source, period, statement date, opening/closing balance, total charges/payments, line count, and reconciliation status. Sorted newest-first. Use this when the user wants to see 'statement activity' or 'show me the bank and card statements on the timeline' — distinct from show_statements_list (which is a flat table) and show_vendor_timeline (which mixes invoices and payments).",
+    input_schema: {
+      type: "object",
+      properties: {
+        source_kind: {
+          type: "string",
+          enum: ["all", "credit_card", "bank_account"],
+          description: "Filter by kind. Default: all.",
+        },
+        source: {
+          type: "string",
+          description: "Filter to a single payment source name (exact match).",
+        },
+        from: {
+          type: "string",
+          description: "YYYY-MM-DD: include statements whose statement_date is on or after this.",
+        },
+        to: {
+          type: "string",
+          description: "YYYY-MM-DD: include statements whose statement_date is on or before this.",
+        },
+        title: {
+          type: "string",
+          description: "Optional title.",
+        },
+      },
+    },
+  },
+  {
     name: "show_inbox_list",
     description:
       "Render a table of all items received in the inbox (receipts that arrived via email or upload). Shows pending, approved, and rejected entries together so the user can see the full history of what's come in. Default returns all statuses, newest first. Cap at 100 rows.",
