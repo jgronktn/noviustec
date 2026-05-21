@@ -132,6 +132,25 @@ function corsHeadersFor(origin) {
   };
 }
 
+/**
+ * Initial Statement.status when a statement is imported. Four outcomes:
+ *   - "needs_attention" — parser flagged a balance-check mismatch
+ *     (opening + charges - payments != closing within tolerance).
+ *   - "reconciled"     — the statement has NO activity worth matching
+ *     (zero lines AND zero total charges AND zero total payments). A
+ *     no-activity month has nothing to pair against the GL, so it's
+ *     already as reconciled as it can be.
+ *   - "imported"       — the default. Lines exist and need matching.
+ */
+function deriveInitialStatementStatus({ validation, ext }) {
+  if (validation?.balance_check === "mismatch") return "needs_attention";
+  const lineCount = Array.isArray(ext.lines) ? ext.lines.length : 0;
+  const charges = Math.abs(Number(ext.balances?.total_charges) || 0);
+  const payments = Math.abs(Number(ext.balances?.total_payments) || 0);
+  if (lineCount === 0 && charges < 0.01 && payments < 0.01) return "reconciled";
+  return "imported";
+}
+
 // Last-4 sniffer used by the auto-link heuristic in mark-as-transfer.
 // Matches "••XXXX", "•XXXX", "**XXXX", "XX-XXXX" — same shape as the
 // reconciliation module's matcher.
@@ -1675,10 +1694,10 @@ export default async function apiRoutes(fastify, opts) {
           document_path: archive?.document_path ?? null,
           original_filename: filename,
           source_file: sourceFilename,
-          status:
-            parseResult.validation?.balance_check === "mismatch"
-              ? "needs_attention"
-              : "imported",
+          status: deriveInitialStatementStatus({
+            validation: parseResult.validation,
+            ext,
+          }),
           notes:
             parseResult.validation?.balance_check === "mismatch"
               ? `Balance check off by ${parseResult.validation.balance_check_diff}`
