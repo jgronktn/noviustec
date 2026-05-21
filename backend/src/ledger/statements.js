@@ -98,6 +98,7 @@ export async function getStatement(id) {
 
 const STATEMENT_LINE_PATCHABLE = new Set([
   "matched_txn_id",
+  "matched_transfer_id",
   "match_method",
   "notes",
 ]);

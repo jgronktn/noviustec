@@ -26,6 +26,11 @@ const TRANSFER_PATCHABLE_FIELDS = new Set([
   "to_source",
   "description",
   "notes",
+  // Allow the auto-link sweep to set the Transfer→Awaiting back-pointer
+  // after sum-match / overpayment detection. The reverse pointer
+  // (AwaitingPayment.paid_transfer_id) is set via markAwaitingPaid; both
+  // sides need to be writable for the link to be bidirectional.
+  "awaiting_id",
 ]);
 
 function toDate(v) {
