@@ -195,10 +195,33 @@ export async function buildTimelineProps({ vendor = null, from, to } = {}) {
       .map((l) => l.matched_transfer_id),
   );
 
-  // Transfers in the period — feed both the right-side cards and the
-  // left-side awaiting cards (for the "settling transfer reconciled?"
-  // signal that drives the green check on a Card balance card).
-  const transferAll = await listTransfers({ from, to });
+  // Transfers in the period — feed both the right-side cards (in-range
+  // only) and the left-side awaiting cards (regardless of date — a
+  // settling transfer can be outside the current timeline window and
+  // still close the loop). Load unfiltered, then derive the in-range
+  // subset.
+  const transferAllUnfiltered = await listTransfers();
+  const transferAll = transferAllUnfiltered.filter((t) => {
+    const iso = isoDate(t.date);
+    if (!iso) return false;
+    if (from && iso < from) return false;
+    if (to && iso > to) return false;
+    return true;
+  });
+
+  // awaiting_id → array of Transfer rows that point at it. Used to
+  // compute the awaiting's statement_matched flag across ANY of its
+  // settling transfers (sum-match means N transfers can settle one
+  // awaiting). Uses the unfiltered list so the linkage check isn't
+  // sensitive to the timeline's date window.
+  const transfersByAwaiting = new Map();
+  for (const t of transferAllUnfiltered) {
+    if (!t.awaiting_id) continue;
+    if (!transfersByAwaiting.has(t.awaiting_id)) {
+      transfersByAwaiting.set(t.awaiting_id, []);
+    }
+    transfersByAwaiting.get(t.awaiting_id).push(t);
+  }
   // Group docs by their GL transaction id. Skip docs that are ALSO tied to
   // an AwaitingPayment row: those already get a left card from the awaiting
   // side (drawn on the invoice's date, not the payment date), and we don't
@@ -256,14 +279,20 @@ export async function buildTimelineProps({ vendor = null, from, to } = {}) {
     // get a distinct visual treatment in the frontend so they don't read
     // as a vendor invoice.
     const isTransferObligation = r.payment_kind === "transfer";
-    // The awaiting card is "statement-matched" when its settling artifact
-    // (a GL row OR a Transfer) is itself matched on some StatementLine.
-    // That signals the full loop is closed: obligation → payment →
-    // statement reconciliation. The frontend lights a green check.
+    // The awaiting card is "statement-matched" when its settling
+    // artifact is itself matched on some StatementLine. With sum-match,
+    // an awaiting can be settled by MULTIPLE Transfers (each linked
+    // via Transfer.awaiting_id) — the check fires if ANY of those
+    // transfers is statement-matched. The full loop is closed:
+    // obligation → payments → statement reconciliation.
+    const linkedTransfers = transfersByAwaiting.get(r.id) ?? [];
     const awaitingStatementMatched =
       (r.paid_txn_id && txnIdsMatchedOnStatement.has(r.paid_txn_id)) ||
       (r.paid_transfer_id &&
-        transferIdsMatchedOnStatement.has(r.paid_transfer_id));
+        transferIdsMatchedOnStatement.has(r.paid_transfer_id)) ||
+      linkedTransfers.some((t) =>
+        transferIdsMatchedOnStatement.has(t.id),
+      );
     leftEvents.push({
       id: r.id,
       kind: r.reference_kind || "invoice",

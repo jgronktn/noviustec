@@ -151,35 +151,79 @@ function sameAccountName(a, b) {
 }
 
 /**
- * Look for an outstanding payment_kind="transfer" awaiting that the
- * just-built Transfer would settle. Heuristic:
+ * Brute-force subset-sum: return the unique subset of `items` whose
+ * `amount` totals `target` within `tolerance`. Returns null when zero
+ * subsets match OR when more than one does (ambiguous → caller must
+ * not auto-resolve). Refuses to enumerate when N > 16 (65 K subsets
+ * is fine, much more is wasted CPU on the request path).
+ */
+function findUniqueSubsetSummingTo(items, target, tolerance = 0.01) {
+  const N = items.length;
+  if (N === 0 || N > 16) return null;
+  let foundMask = -1;
+  for (let mask = 1; mask < 1 << N; mask++) {
+    let sum = 0;
+    for (let i = 0; i < N; i++) {
+      if (mask & (1 << i)) sum += Number(items[i].amount);
+    }
+    if (Math.abs(sum - target) <= tolerance) {
+      if (foundMask !== -1) return null; // ambiguous: multiple subsets sum
+      foundMask = mask;
+    }
+  }
+  if (foundMask === -1) return null;
+  const out = [];
+  for (let i = 0; i < N; i++) {
+    if (foundMask & (1 << i)) out.push(items[i]);
+  }
+  return out;
+}
+
+/**
+ * Find the unique outstanding awaiting-transfer that the given Transfer
+ * would settle, considering sum-matches across all unlinked Transfers.
+ * The newly-created Transfer is passed as `newTransfer`; the caller
+ * provides the rest of the unlinked Transfer rows so we can subset-sum.
+ *
+ * Returns { awaiting, transfersToLink: [Transfer, ...] } when exactly
+ * one awaiting + one subset summing to its amount can be uniquely
+ * identified, AND the new Transfer is part of that subset. Otherwise
+ * returns null.
+ *
+ * Side rules:
  *   - awaiting.status === "awaiting"
  *   - awaiting.payment_kind === "transfer"
- *   - awaiting.amount within $0.01 of the Transfer's amount
- *   - awaiting.vendor (the card / account it's owed against) matches
- *     either the Transfer's to_source or from_source by name or last-4
- *
- * Returns the awaiting row when EXACTLY ONE candidate is found.
- * Multiple candidates → returns null (ambiguous, leave to user); zero
- * candidates → returns null. Uses dynamic import for listAwaiting so
- * routes.js doesn't have to grow another top-level import.
+ *   - candidate Transfer.to_source matches awaiting.vendor by name or
+ *     last-4 (we only consider transfers paying INTO the awaiting's
+ *     vendor — money flowing out of a card to another account is
+ *     unusual enough that we don't try to auto-link it).
  */
-async function findOutstandingAwaitingTransfer({
-  fromSource,
-  toSource,
-  amount,
+function findAutoLinkSubset({
+  newTransfer,
+  unlinkedTransfers,
+  outstandingAwaitings,
 }) {
-  const { listAwaiting } = await import("../ledger/index.js");
-  const allAwaiting = await listAwaiting({ status: "awaiting" });
-  const candidates = allAwaiting.filter((aw) => {
-    if ((aw.payment_kind || "expense") !== "transfer") return false;
-    if (Math.abs(Number(aw.amount) - amount) > 0.01) return false;
-    return (
-      sameAccountName(aw.vendor, toSource) ||
-      sameAccountName(aw.vendor, fromSource)
+  const candidateAwaitings = outstandingAwaitings.filter(
+    (aw) => (aw.payment_kind || "expense") === "transfer",
+  );
+  const winners = []; // { awaiting, subset }
+  for (const aw of candidateAwaitings) {
+    // Eligible transfers: those whose to_source matches this awaiting's
+    // vendor (i.e. they're paying INTO this account). Always includes
+    // the new transfer when it qualifies — otherwise no match is
+    // possible by definition.
+    const eligible = unlinkedTransfers.filter((t) =>
+      sameAccountName(t.to_source, aw.vendor),
     );
-  });
-  return candidates.length === 1 ? candidates[0] : null;
+    if (eligible.length === 0) continue;
+    const target = Math.abs(Number(aw.amount));
+    const subset = findUniqueSubsetSummingTo(eligible, target, 0.01);
+    if (!subset) continue;
+    if (!subset.some((t) => t.id === newTransfer.id)) continue;
+    winners.push({ awaiting: aw, subset });
+    if (winners.length > 1) return null; // multiple awaitings ambiguous
+  }
+  return winners.length === 1 ? winners[0] : null;
 }
 
 export default async function apiRoutes(fastify, opts) {
@@ -1952,21 +1996,11 @@ export default async function apiRoutes(fastify, opts) {
           ? canonicalOther || req.body.other_source
           : stmt.source;
 
-        // ── Auto-link to any outstanding awaiting-transfer this would settle ──
-        // The most common case: a card-balance awaiting-transfer (auto-created
-        // at card-statement import) is outstanding for ••9475, and the user is
-        // now marking the bank-side debit line as a transfer TO ••9475. If the
-        // amounts match exactly and the to_source/from_source matches the
-        // awaiting's vendor, link them so the awaiting flips to paid and its
-        // left-side timeline card visually settles.
-        const awaitingMatch = await findOutstandingAwaitingTransfer({
-          fromSource,
-          toSource,
-          amount,
-        });
-        const linkAwaitingId = awaitingMatch?.id ?? null;
-
-        const { id: transferId } = await addTransfer({
+        // Create the Transfer first (unlinked); we'll then run the
+        // sum-match resolver across all unlinked transfers to see if
+        // this one closes the loop on an awaiting-transfer (either by
+        // itself or as the final piece of a multi-payment paydown).
+        const { id: transferId, row: transferRow } = await addTransfer({
           date: req.body.date,
           amount,
           currency: stmt.currency ?? "USD",
@@ -1975,23 +2009,41 @@ export default async function apiRoutes(fastify, opts) {
           description: req.body.description || line.description || "",
           notes: req.body.notes ?? "",
           source_file: stmt.source_file ?? null,
-          awaiting_id: linkAwaitingId,
           created_by: "user",
         });
 
-        if (linkAwaitingId) {
-          try {
-            await markAwaitingPaid(linkAwaitingId, {
+        // ── Auto-link: 1:1 or N:1 (subset-sum) settlement detection ─────
+        let autoLink = null;
+        try {
+          const [allUnlinked, allAwaiting] = await Promise.all([
+            listTransfers().then((rows) => rows.filter((t) => !t.awaiting_id)),
+            listAwaiting({ status: "awaiting" }),
+          ]);
+          // The new Transfer is included in allUnlinked (just inserted,
+          // awaiting_id is null until we link it below).
+          const newTransfer = allUnlinked.find((t) => t.id === transferId) ?? {
+            id: transferId,
+            ...transferRow,
+            awaiting_id: null,
+          };
+          autoLink = findAutoLinkSubset({
+            newTransfer,
+            unlinkedTransfers: allUnlinked,
+            outstandingAwaitings: allAwaiting,
+          });
+          if (autoLink) {
+            for (const t of autoLink.subset) {
+              await updateTransfer(t.id, { awaiting_id: autoLink.awaiting.id });
+            }
+            await markAwaitingPaid(autoLink.awaiting.id, {
               paid_transfer_id: transferId,
             });
-          } catch (err) {
-            // Best-effort: the Transfer is already created and the line is
-            // about to be matched. Log but don't fail the request.
-            req.log.error(
-              { err: err.message, awaiting_id: linkAwaitingId, transfer_id: transferId },
-              "auto-link of awaiting-transfer failed; transfer still created",
-            );
           }
+        } catch (err) {
+          req.log.error(
+            { err: err.message, transfer_id: transferId },
+            "auto-link sweep failed; transfer remains unlinked",
+          );
         }
 
         await updateStatementLine(lineId, {
@@ -2007,7 +2059,10 @@ export default async function apiRoutes(fastify, opts) {
             from_source: fromSource,
             to_source: toSource,
             amount,
-            auto_linked_awaiting: linkAwaitingId,
+            auto_linked_awaiting: autoLink?.awaiting?.id ?? null,
+            auto_linked_subset: autoLink
+              ? autoLink.subset.map((t) => t.id)
+              : null,
           },
           "statement line marked as transfer",
         );
@@ -2015,7 +2070,8 @@ export default async function apiRoutes(fastify, opts) {
         return {
           line_id: lineId,
           transfer_id: transferId,
-          auto_linked_awaiting: linkAwaitingId,
+          auto_linked_awaiting: autoLink?.awaiting?.id ?? null,
+          auto_linked_subset_size: autoLink ? autoLink.subset.length : 0,
         };
       } catch (err) {
         req.log.error(
