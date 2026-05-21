@@ -1136,13 +1136,20 @@ export async function runTool(name, input) {
     }
 
     case "show_statement_timeline": {
+      // Produce data in the SAME shape as buildTimelineProps so the
+      // existing VendorTimelinePanel can render it. The only thing that
+      // differs is the event population:
+      //   - Left side: card-balance awaiting-transfer rows (the
+      //     `is_transfer_obligation: true` rows we auto-create at
+      //     card-statement import — they render as "Card balance".
+      //   - Right side: bank statements as new "Statement" cards.
+      // Everything else (regular invoices/receipts/payments/GL transfers)
+      // is excluded — this is a statements-only view.
       const sourceKindFilter = args.source_kind ?? "all";
-      let rows = await listStatements({ status: "all" });
+      let allStatements = await listStatements({ status: "all" });
 
-      // Backfill source_kind from the Sources sheet for any statement
-      // whose own source_kind is null (legacy rows imported before the
-      // parser populated the field). Last-4 also catches renames like
-      // "PROPERTY PROTECTION ••9475" → "Bank of America ... ••9475".
+      // source_kind backfill (legacy rows imported before the parser
+      // populated the field).
       const sources = await getPaymentSources({ activeOnly: false });
       const last4 = (s) => {
         if (!s) return null;
@@ -1151,10 +1158,8 @@ export async function runTool(name, input) {
       };
       function resolveSourceKind(stmt) {
         if (stmt.source_kind) return stmt.source_kind;
-        // 1. Try exact name match in Sources sheet.
         const exact = sources.find((s) => s.name === stmt.source);
         if (exact?.type) return exact.type;
-        // 2. Try last-4 match in Sources sheet.
         const stmtLast4 = last4(stmt.source);
         if (stmtLast4) {
           const byLast4 = sources.find(
@@ -1162,10 +1167,6 @@ export async function runTool(name, input) {
           );
           if (byLast4?.type) return byLast4.type;
         }
-        // 3. Heuristic on the source name itself. Banks are easier to
-        //    spot (they call themselves "Banking", "Checking", "Savings");
-        //    anything else with a last-4 marker we treat as credit_card
-        //    on the assumption that bare ••XXXX patterns are usually cards.
         const lower = String(stmt.source || "").toLowerCase();
         if (/\b(banking|bank account|checking|savings)\b/.test(lower)) {
           return "bank_account";
@@ -1180,123 +1181,230 @@ export async function runTool(name, input) {
         }
         return null;
       }
-      rows = rows.map((r) => ({ ...r, source_kind: resolveSourceKind(r) }));
+      allStatements = allStatements.map((r) => ({
+        ...r,
+        source_kind: resolveSourceKind(r),
+      }));
 
+      // Apply user-supplied filters.
+      let statements = allStatements;
       if (sourceKindFilter !== "all") {
-        rows = rows.filter((r) => r.source_kind === sourceKindFilter);
+        statements = statements.filter(
+          (r) => r.source_kind === sourceKindFilter,
+        );
       }
-      if (args.source) rows = rows.filter((r) => r.source === args.source);
+      if (args.source) {
+        statements = statements.filter((r) => r.source === args.source);
+      }
       if (args.from) {
-        rows = rows.filter((r) => {
+        statements = statements.filter((r) => {
           const d = isoDate(r.statement_date);
           return d && d >= args.from;
         });
       }
       if (args.to) {
-        rows = rows.filter((r) => {
+        statements = statements.filter((r) => {
           const d = isoDate(r.statement_date);
           return d && d <= args.to;
         });
       }
 
-      // Line counts in one pass.
-      const allLines = await listStatementLines();
-      const linesByStatement = new Map();
-      for (const ln of allLines) {
-        const k = ln.statement_id;
-        linesByStatement.set(k, (linesByStatement.get(k) ?? 0) + 1);
+      const cardStmts = statements.filter(
+        (s) => s.source_kind === "credit_card",
+      );
+      const bankStmts = statements.filter(
+        (s) => s.source_kind === "bank_account",
+      );
+
+      // Index awaiting-transfer rows by their originating statement so
+      // the card-balance left card lines up with each card statement.
+      const allAwaiting = await listAwaiting({ status: "all" });
+      const awaitingByStmtId = new Map();
+      for (const aw of allAwaiting) {
+        if (aw.statement_id) awaitingByStmtId.set(aw.statement_id, aw);
       }
 
-      const statements = rows
-        .map((r) => ({
-          id: r.id,
-          status: r.status,
-          source: r.source,
-          source_kind: r.source_kind ?? null,
-          period_start: isoDate(r.period_start),
-          period_end: isoDate(r.period_end),
-          statement_date: isoDate(r.statement_date),
-          currency: r.currency ?? "USD",
-          opening_balance:
-            r.opening_balance == null ? null : Number(r.opening_balance),
-          closing_balance:
-            r.closing_balance == null ? null : Number(r.closing_balance),
-          total_charges:
-            r.total_charges == null ? null : Number(r.total_charges),
-          total_payments:
-            r.total_payments == null ? null : Number(r.total_payments),
-          line_count: linesByStatement.get(r.id) ?? 0,
-          document_path: r.document_path ?? null,
-          download_path: r.document_path
-            ? `/api/documents/statement/${encodeURIComponent(r.id)}`
+      // Statement-line matched sets for the green check signal.
+      const allLines = await listStatementLines();
+      const txnIdsMatchedOnStatement = new Set(
+        allLines.filter((l) => l.matched_txn_id).map((l) => l.matched_txn_id),
+      );
+      const transferIdsMatchedOnStatement = new Set(
+        allLines
+          .filter((l) => l.matched_transfer_id)
+          .map((l) => l.matched_transfer_id),
+      );
+
+      // Multi-transfer linkage (sum-match settled awaitings).
+      const allTransfers = await listTransfers();
+      const transfersByAwaiting = new Map();
+      for (const t of allTransfers) {
+        if (!t.awaiting_id) continue;
+        if (!transfersByAwaiting.has(t.awaiting_id)) {
+          transfersByAwaiting.set(t.awaiting_id, []);
+        }
+        transfersByAwaiting.get(t.awaiting_id).push(t);
+      }
+
+      // ── Left events: card-balance awaiting-transfer rows ──────────────
+      const leftEvents = [];
+      for (const stmt of cardStmts) {
+        const aw = awaitingByStmtId.get(stmt.id);
+        if (!aw) continue;
+        const date =
+          isoDate(aw.date) ||
+          isoDate(stmt.statement_date) ||
+          isoDate(stmt.period_end);
+        const linkedTransfers = transfersByAwaiting.get(aw.id) ?? [];
+        const awStatementMatched =
+          (aw.paid_txn_id && txnIdsMatchedOnStatement.has(aw.paid_txn_id)) ||
+          (aw.paid_transfer_id &&
+            transferIdsMatchedOnStatement.has(aw.paid_transfer_id)) ||
+          linkedTransfers.some((t) =>
+            transferIdsMatchedOnStatement.has(t.id),
+          );
+        leftEvents.push({
+          id: aw.id,
+          kind: aw.reference_kind || "statement",
+          payment_kind: "transfer",
+          is_transfer_obligation: true,
+          date,
+          amount: Math.round(Number(aw.amount) * 100) / 100,
+          currency: aw.currency ?? "USD",
+          reference_number: aw.reference_number ?? null,
+          status: aw.status,
+          days_outstanding: null,
+          paid_at: aw.paid_at
+            ? typeof aw.paid_at === "string"
+              ? aw.paid_at.slice(0, 10)
+              : new Date(aw.paid_at).toISOString().slice(0, 10)
             : null,
-          original_filename: r.original_filename ?? null,
-          notes: r.notes ?? "",
-        }))
-        .sort((a, b) =>
-          (b.statement_date ?? "").localeCompare(a.statement_date ?? ""),
-        );
+          paid_txn_id: aw.paid_txn_id ?? null,
+          paid_transfer_id: aw.paid_transfer_id ?? null,
+          link_id: aw.paid_transfer_id ?? aw.paid_txn_id ?? aw.id,
+          description: aw.description ?? "",
+          vendor: aw.vendor,
+          source: "awaiting",
+          statement_matched: !!awStatementMatched,
+        });
+      }
 
-      const totals = statements.reduce(
-        (acc, s) => {
-          acc.charges += Number(s.total_charges) || 0;
-          acc.payments += Number(s.total_payments) || 0;
-          return acc;
-        },
-        { charges: 0, payments: 0 },
-      );
-      totals.charges = Math.round(totals.charges * 100) / 100;
-      totals.payments = Math.round(totals.payments * 100) / 100;
+      // ── Right events: bank statements as "Statement" cards ────────────
+      const rightEvents = [];
+      for (const stmt of bankStmts) {
+        const date =
+          isoDate(stmt.statement_date) || isoDate(stmt.period_end);
+        if (!date) continue;
+        rightEvents.push({
+          id: stmt.id,
+          kind: "statement",
+          date,
+          amount:
+            stmt.closing_balance == null
+              ? 0
+              : Math.round(Math.abs(Number(stmt.closing_balance)) * 100) / 100,
+          currency: stmt.currency ?? "USD",
+          reference_number: stmt.original_filename || stmt.id,
+          reference_kind: "statement",
+          description: `${isoDate(stmt.period_start) ?? "?"} → ${isoDate(stmt.period_end) ?? "?"}`,
+          category: null,
+          payment_source: stmt.source,
+          vendor: stmt.source,
+          link_id: stmt.id,
+          statement_matched: stmt.status === "reconciled",
+        });
+      }
 
-      const counts = statements.reduce(
-        (acc, s) => {
-          acc.by_status[s.status] = (acc.by_status[s.status] ?? 0) + 1;
-          const k = s.source_kind || "unknown";
-          acc.by_kind[k] = (acc.by_kind[k] ?? 0) + 1;
-          return acc;
-        },
-        { by_status: {}, by_kind: {} },
-      );
+      // Build rows by date (newest-first), same as buildTimelineProps.
+      const dateSet = new Set([
+        ...leftEvents.map((e) => e.date).filter(Boolean),
+        ...rightEvents.map((e) => e.date).filter(Boolean),
+      ]);
+      const sortedDates = [...dateSet].sort().reverse();
+      const rows = sortedDates.map((d) => ({
+        date: d,
+        left: leftEvents.filter((e) => e.date === d),
+        right: rightEvents.filter((e) => e.date === d),
+      }));
+
+      const today = new Date().toISOString().slice(0, 10);
+      const totalLeft = leftEvents.reduce((s, e) => s + (e.amount ?? 0), 0);
+      const totalRight = rightEvents.reduce((s, e) => s + (e.amount ?? 0), 0);
+      const outstandingAmount = leftEvents
+        .filter((e) => e.status === "awaiting" || e.status === "overdue")
+        .reduce((s, e) => s + (e.amount ?? 0), 0);
+      const distinctSources = new Set(
+        [...leftEvents, ...rightEvents].map((e) => e.vendor),
+      ).size;
 
       const filterParts = [];
-      if (sourceKindFilter !== "all") filterParts.push(`kind=${sourceKindFilter}`);
+      if (sourceKindFilter !== "all")
+        filterParts.push(`kind=${sourceKindFilter}`);
       if (args.source) filterParts.push(`source=${args.source}`);
       if (args.from) filterParts.push(`from ${args.from}`);
       if (args.to) filterParts.push(`through ${args.to}`);
       const filterDesc = filterParts.join(" · ");
       const title =
         args.title ??
-        (filterDesc ? `Statement activity · ${filterDesc}` : "Statement activity");
+        (filterDesc
+          ? `Statement activity · ${filterDesc}`
+          : "Statement activity");
 
-      // Slim per-statement summary for the agent (with ids so follow-up
-      // calls like show_reconciliation or read_statement can reference).
-      const agentEntries = statements.slice(0, 50).map((e) => ({
-        id: e.id,
-        source: e.source,
-        source_kind: e.source_kind,
-        statement_date: e.statement_date,
-        period_start: e.period_start,
-        period_end: e.period_end,
-        status: e.status,
-        closing_balance: e.closing_balance,
-        line_count: e.line_count,
-      }));
+      // Slim per-statement summary for the agent.
+      const agentEntries = statements
+        .slice()
+        .sort((a, b) =>
+          (isoDate(b.statement_date) ?? "").localeCompare(
+            isoDate(a.statement_date) ?? "",
+          ),
+        )
+        .slice(0, 50)
+        .map((e) => ({
+          id: e.id,
+          source: e.source,
+          source_kind: e.source_kind,
+          statement_date: isoDate(e.statement_date),
+          period_start: isoDate(e.period_start),
+          period_end: isoDate(e.period_end),
+          status: e.status,
+          closing_balance: e.closing_balance,
+        }));
 
       return {
         __panel: {
           kind: "statement_timeline",
           title,
           props: {
-            count: statements.length,
-            counts,
-            totals,
+            // Same shape as buildTimelineProps so VendorTimelinePanel
+            // can render this view unchanged.
+            vendor: "Statement activity",
+            query: null,
+            is_global: true,
             period: { from: args.from ?? null, to: args.to ?? null },
-            statements,
+            rows,
+            summary: {
+              total_invoiced: Math.round(totalLeft * 100) / 100,
+              total_paid: Math.round(totalRight * 100) / 100,
+              total_left: Math.round(totalLeft * 100) / 100,
+              total_right: Math.round(totalRight * 100) / 100,
+              outstanding_balance: Math.round(outstandingAmount * 100) / 100,
+              invoice_count: leftEvents.length,
+              payment_count: rightEvents.length,
+              awaiting_count: leftEvents.filter(
+                (e) => e.status === "awaiting",
+              ).length,
+              overdue_count: leftEvents.filter((e) => e.status === "overdue")
+                .length,
+              distinct_vendors: distinctSources,
+              outstanding_invoices: [],
+              overdue_days_threshold: TIMELINE_OVERDUE_DAYS,
+              as_of: today,
+              transfer_obligation_count: leftEvents.length,
+              transfer_count: 0,
+            },
           },
         },
         count: statements.length,
-        counts,
-        totals,
         entries: agentEntries,
       };
     }

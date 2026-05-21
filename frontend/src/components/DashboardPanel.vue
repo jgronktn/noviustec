@@ -10,7 +10,6 @@ import InboxListPanel from "./panels/InboxListPanel.vue";
 import FileListPanel from "./panels/FileListPanel.vue";
 import VendorTimelinePanel from "./panels/VendorTimelinePanel.vue";
 import StatementsListPanel from "./panels/StatementsListPanel.vue";
-import StatementTimelinePanel from "./panels/StatementTimelinePanel.vue";
 import ReconciliationPanel from "./panels/ReconciliationPanel.vue";
 
 const props = defineProps({
@@ -39,8 +38,11 @@ const KIND_TO_COMPONENT = {
   inbox_list: InboxListPanel,
   file_list: FileListPanel,
   vendor_timeline: VendorTimelinePanel,
+  // Statement-only timeline reuses the same template — handler emits
+  // events in vendor-timeline shape (card balances on the left,
+  // bank statements on the right).
+  statement_timeline: VendorTimelinePanel,
   statements_list: StatementsListPanel,
-  statement_timeline: StatementTimelinePanel,
   reconciliation: ReconciliationPanel,
 };
 
