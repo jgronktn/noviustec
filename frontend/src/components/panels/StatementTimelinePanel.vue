@@ -43,37 +43,57 @@ function statusClass(status) {
   return `status-${status || "imported"}`;
 }
 
-// Interleave month-boundary ticks between statement rows, and slot a
-// TODAY marker between past and future events. Statements are already
-// newest-first; the first one in each month gets a tick above.
+// Group statements by month (YYYY-MM). Each month becomes a section
+// with the month label, the TODAY marker if it falls in that month,
+// and one row per statement. Sections render with a min-height so a
+// month with one statement still occupies visible vertical space,
+// making elapsed time legible at a glance.
 const todayIso = new Date().toISOString().slice(0, 10);
+const todayYm = todayIso.slice(0, 7);
 
-const items = computed(() => {
+const monthSections = computed(() => {
   const rows = props.data?.statements ?? [];
-  const out = [];
-  let lastMonth = null;
-  let todayInserted = false;
+  if (rows.length === 0) return [];
+
+  // Build the full month range from oldest statement → max(latest statement, today)
+  // so empty months in between still appear with vertical space.
+  const dates = rows
+    .map((s) => s.statement_date || s.period_end)
+    .filter(Boolean)
+    .sort();
+  const oldestYm = dates[0].slice(0, 7);
+  const latestYm = dates[dates.length - 1].slice(0, 7);
+  const endYm = latestYm > todayYm ? latestYm : todayYm;
+
+  const monthsAsc = [];
+  let cursor = oldestYm;
+  while (cursor <= endYm) {
+    monthsAsc.push(cursor);
+    cursor = nextMonth(cursor);
+  }
+  // Render newest-first to match the vendor timeline's orientation.
+  const monthsDesc = monthsAsc.reverse();
+
+  const rowsByMonth = new Map();
   for (const s of rows) {
     const date = s.statement_date || s.period_end || "";
-    // TODAY tick: drop in once we pass into past-or-equal-to-today.
-    if (!todayInserted && date && date <= todayIso) {
-      out.push({ type: "today", date: todayIso });
-      todayInserted = true;
-    }
-    const ym = date ? date.slice(0, 7) : null;
-    if (ym && ym !== lastMonth) {
-      out.push({ type: "month", ym });
-      lastMonth = ym;
-    }
-    out.push({ type: "row", statement: s });
+    const ym = date.slice(0, 7);
+    if (!rowsByMonth.has(ym)) rowsByMonth.set(ym, []);
+    rowsByMonth.get(ym).push(s);
   }
-  // If every statement is in the future relative to today, append TODAY
-  // at the end so the marker is at least somewhere.
-  if (!todayInserted) {
-    out.push({ type: "today", date: todayIso });
-  }
-  return out;
+
+  return monthsDesc.map((ym) => ({
+    ym,
+    statements: rowsByMonth.get(ym) ?? [],
+    hasToday: ym === todayYm,
+  }));
 });
+
+function nextMonth(yyyyMm) {
+  const [y, m] = yyyyMm.split("-").map(Number);
+  const d = new Date(Date.UTC(y, m, 1)); // m is 0-indexed; m here = next month
+  return d.toISOString().slice(0, 7);
+}
 </script>
 
 <template>
@@ -114,38 +134,46 @@ const items = computed(() => {
     </div>
 
     <div v-else class="st-timeline">
-      <template v-for="(item, idx) in items" :key="idx">
-        <div v-if="item.type === 'month'" class="st-month-tick">
-          <span class="st-month-label">{{ shortMonth(item.ym) }}</span>
-        </div>
-        <div v-else-if="item.type === 'today'" class="st-today">
+      <section
+        v-for="sec in monthSections"
+        :key="sec.ym"
+        class="st-month-section"
+      >
+        <header class="st-month-tick">
+          <span class="st-month-label">{{ shortMonth(sec.ym) }}</span>
+        </header>
+        <div v-if="sec.hasToday" class="st-today">
           <span class="st-today-word">TODAY</span>
-          <span class="st-today-date">{{ shortDate(item.date) }}</span>
+          <span class="st-today-date">{{ shortDate(todayIso) }}</span>
         </div>
-        <div v-else class="st-row">
-          <!-- Card statements live on the left, bank statements on the
-               right. The center axis (date + dot) separates them, same
-               as the vendor timeline. -->
+        <!-- Card statements live on the left, bank statements on the
+             right. The center axis (date + dot) separates them, same
+             as the vendor timeline. -->
+        <div
+          v-for="stmt in sec.statements"
+          :key="stmt.id"
+          class="st-row"
+        >
           <div class="st-side st-left">
             <div
-              v-if="item.statement.source_kind === 'credit_card'"
+              v-if="stmt.source_kind === 'credit_card'"
               class="st-card kind-card"
             >
-              <span class="st-card-kind">{{ kindLabel(item.statement.source_kind) }}</span>
-              <span class="st-card-source">{{ item.statement.source }}</span>
+              <span class="st-card-kind">{{ kindLabel(stmt.source_kind) }}</span>
+              <span class="st-card-source">{{ stmt.source }}</span>
               <span class="st-card-period mono">
-                {{ shortDate(item.statement.period_start) }} →
-                {{ shortDate(item.statement.period_end) }}
+                {{ shortDate(stmt.period_start) }} →
+                {{ shortDate(stmt.period_end) }}
               </span>
               <span class="st-card-amount mono">
-                {{ fmt(item.statement.closing_balance, item.statement.currency) }}
+                {{ fmt(stmt.closing_balance, stmt.currency) }}
               </span>
-              <span class="status-pill" :class="statusClass(item.statement.status)">
-                {{ (item.statement.status || "imported").replace(/_/g, " ") }}
+              <span class="status-pill" :class="statusClass(stmt.status)">
+                {{ (stmt.status || "imported").replace(/_/g, " ") }}
               </span>
               <a
-                v-if="item.statement.download_path"
-                :href="item.statement.download_path"
+                v-if="stmt.download_path"
+                :href="stmt.download_path"
                 target="_blank"
                 rel="noopener"
                 class="st-link"
@@ -154,30 +182,30 @@ const items = computed(() => {
             </div>
           </div>
           <div class="st-axis">
-            <div class="st-dot" :class="kindClass(item.statement.source_kind)" />
-            <span class="st-date mono">{{ shortDate(item.statement.statement_date) }}</span>
+            <div class="st-dot" :class="kindClass(stmt.source_kind)" />
+            <span class="st-date mono">{{ shortDate(stmt.statement_date) }}</span>
           </div>
           <div class="st-side st-right">
             <div
-              v-if="item.statement.source_kind !== 'credit_card'"
+              v-if="stmt.source_kind !== 'credit_card'"
               class="st-card"
-              :class="kindClass(item.statement.source_kind)"
+              :class="kindClass(stmt.source_kind)"
             >
-              <span class="st-card-kind">{{ kindLabel(item.statement.source_kind) }}</span>
-              <span class="st-card-source">{{ item.statement.source }}</span>
+              <span class="st-card-kind">{{ kindLabel(stmt.source_kind) }}</span>
+              <span class="st-card-source">{{ stmt.source }}</span>
               <span class="st-card-period mono">
-                {{ shortDate(item.statement.period_start) }} →
-                {{ shortDate(item.statement.period_end) }}
+                {{ shortDate(stmt.period_start) }} →
+                {{ shortDate(stmt.period_end) }}
               </span>
               <span class="st-card-amount mono">
-                {{ fmt(item.statement.closing_balance, item.statement.currency) }}
+                {{ fmt(stmt.closing_balance, stmt.currency) }}
               </span>
-              <span class="status-pill" :class="statusClass(item.statement.status)">
-                {{ (item.statement.status || "imported").replace(/_/g, " ") }}
+              <span class="status-pill" :class="statusClass(stmt.status)">
+                {{ (stmt.status || "imported").replace(/_/g, " ") }}
               </span>
               <a
-                v-if="item.statement.download_path"
-                :href="item.statement.download_path"
+                v-if="stmt.download_path"
+                :href="stmt.download_path"
                 target="_blank"
                 rel="noopener"
                 class="st-link"
@@ -186,7 +214,7 @@ const items = computed(() => {
             </div>
           </div>
         </div>
-      </template>
+      </section>
     </div>
   </div>
 </template>
@@ -256,7 +284,6 @@ const items = computed(() => {
   position: relative;
   display: flex;
   flex-direction: column;
-  gap: 0.5rem;
 }
 
 /* Center spine — runs through the middle, separating card statements
@@ -270,6 +297,24 @@ const items = computed(() => {
   width: 2px;
   background: var(--border);
   transform: translateX(-50%);
+}
+
+/* Each month is its own section with a guaranteed minimum vertical
+   space — so a month with one statement still occupies a visible
+   chunk of the timeline and elapsed time reads visually. */
+.st-month-section {
+  position: relative;
+  min-height: 150px;
+  padding: 0.5rem 0 0.75rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+
+/* Faint horizontal rule between months so empty months are visible
+   as gaps rather than dead air. */
+.st-month-section + .st-month-section {
+  border-top: 1px dashed var(--border);
 }
 
 .st-row {

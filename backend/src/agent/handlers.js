@@ -1138,6 +1138,50 @@ export async function runTool(name, input) {
     case "show_statement_timeline": {
       const sourceKindFilter = args.source_kind ?? "all";
       let rows = await listStatements({ status: "all" });
+
+      // Backfill source_kind from the Sources sheet for any statement
+      // whose own source_kind is null (legacy rows imported before the
+      // parser populated the field). Last-4 also catches renames like
+      // "PROPERTY PROTECTION ••9475" → "Bank of America ... ••9475".
+      const sources = await getPaymentSources({ activeOnly: false });
+      const last4 = (s) => {
+        if (!s) return null;
+        const m = String(s).match(/(?:••?|\*\*|-)\s*(\d{4})\b/);
+        return m ? m[1] : null;
+      };
+      function resolveSourceKind(stmt) {
+        if (stmt.source_kind) return stmt.source_kind;
+        // 1. Try exact name match in Sources sheet.
+        const exact = sources.find((s) => s.name === stmt.source);
+        if (exact?.type) return exact.type;
+        // 2. Try last-4 match in Sources sheet.
+        const stmtLast4 = last4(stmt.source);
+        if (stmtLast4) {
+          const byLast4 = sources.find(
+            (s) => last4(s.name) === stmtLast4 && s.type,
+          );
+          if (byLast4?.type) return byLast4.type;
+        }
+        // 3. Heuristic on the source name itself. Banks are easier to
+        //    spot (they call themselves "Banking", "Checking", "Savings");
+        //    anything else with a last-4 marker we treat as credit_card
+        //    on the assumption that bare ••XXXX patterns are usually cards.
+        const lower = String(stmt.source || "").toLowerCase();
+        if (/\b(banking|bank account|checking|savings)\b/.test(lower)) {
+          return "bank_account";
+        }
+        if (
+          /\b(card|visa|mastercard|amex|american express|discover|credit|cash rewards)\b/.test(
+            lower,
+          ) ||
+          stmtLast4
+        ) {
+          return "credit_card";
+        }
+        return null;
+      }
+      rows = rows.map((r) => ({ ...r, source_kind: resolveSourceKind(r) }));
+
       if (sourceKindFilter !== "all") {
         rows = rows.filter((r) => r.source_kind === sourceKindFilter);
       }
