@@ -463,12 +463,22 @@ export async function buildTimelineProps({ vendor = null, from, to } = {}) {
       right: rightEvents.filter((e) => e.date === d),
     }));
 
+  // Totals reflect external business activity only — vendor invoices and
+  // vendor payments. The transfer-kind artifacts (auto-created Card
+  // balance awaitings and the inter-account Transfer cards that settle
+  // them) are EXCLUDED because they are internal money movements: the
+  // underlying expenses they sum/settle are already counted via the
+  // individual GL transactions on the right side. Including them would
+  // double-count every credit-card statement cycle.
   const totalInvoiced = leftEvents
-    .filter((e) => e.source === "awaiting")
+    .filter((e) => e.source === "awaiting" && !e.is_transfer_obligation)
     .reduce((s, e) => s + e.amount, 0);
-  const totalPaid = rightEvents.reduce((s, e) => s + e.amount, 0);
+  const totalPaid = rightEvents
+    .filter((e) => e.kind !== "transfer")
+    .reduce((s, e) => s + e.amount, 0);
   // Totals dedupe across overlapping representations of the same money:
-  //   - Awaiting card always counts (one per AwaitingPayment row).
+  //   - Awaiting card always counts (one per AwaitingPayment row), EXCEPT
+  //     Card balance awaitings (transfer obligations) — see above.
   //   - GL doc cards on a txn that paid an awaiting → skipped (the
   //     awaiting card already covers that money).
   //   - GL doc cards on an unpaid-via-awaiting txn → count the GL row's
@@ -484,6 +494,7 @@ export async function buildTimelineProps({ vendor = null, from, to } = {}) {
     const countedTxns = new Set();
     for (const e of leftEvents) {
       if (e.source === "awaiting") {
+        if (e.is_transfer_obligation) continue; // Card balance — internal
         total += e.amount;
         continue;
       }
@@ -502,6 +513,7 @@ export async function buildTimelineProps({ vendor = null, from, to } = {}) {
     .filter(
       (e) =>
         e.source === "awaiting" &&
+        !e.is_transfer_obligation &&
         (e.status === "awaiting" || e.status === "overdue"),
     )
     .map((e) => ({
@@ -539,10 +551,26 @@ export async function buildTimelineProps({ vendor = null, from, to } = {}) {
       total_left: Math.round(totalLeft * 100) / 100,
       total_right: Math.round(totalRight * 100) / 100,
       outstanding_balance: Math.round(outstandingBalance * 100) / 100,
-      invoice_count: leftEvents.filter((e) => e.source === "awaiting").length,
-      payment_count: rightEvents.length,
-      awaiting_count: leftEvents.filter((e) => e.status === "awaiting").length,
-      overdue_count: leftEvents.filter((e) => e.status === "overdue").length,
+      // Same exclusion rule as totalLeft/totalRight: counts reflect
+      // external (vendor-facing) activity only. Card balance awaitings
+      // and Transfer cards represent internal money moves and are
+      // counted separately if the UI ever wants them.
+      invoice_count: leftEvents.filter(
+        (e) => e.source === "awaiting" && !e.is_transfer_obligation,
+      ).length,
+      payment_count: rightEvents.filter((e) => e.kind !== "transfer").length,
+      awaiting_count: leftEvents.filter(
+        (e) => e.status === "awaiting" && !e.is_transfer_obligation,
+      ).length,
+      overdue_count: leftEvents.filter(
+        (e) => e.status === "overdue" && !e.is_transfer_obligation,
+      ).length,
+      // Optional surface for the UI if it wants to expose the internal
+      // totals separately (e.g. a "Card balances" / "Transfers" footer).
+      transfer_obligation_count: leftEvents.filter(
+        (e) => e.is_transfer_obligation,
+      ).length,
+      transfer_count: rightEvents.filter((e) => e.kind === "transfer").length,
       distinct_vendors: distinctVendors,
       outstanding_invoices: outstandingInvoices,
       overdue_days_threshold: TIMELINE_OVERDUE_DAYS,
