@@ -69,6 +69,35 @@ for (const t of transfers) {
   });
 
   if (candidates.length === 0) {
+    // Show why nothing matched so the user can diagnose. The current
+    // awaiting pool may have all been carried-forward / written-off
+    // by a subsequent statement, or amounts may diverge by more than
+    // the $0.01 tolerance, or source names may not line up.
+    const sameAmount = awaitings.filter(
+      (aw) => Math.abs(Number(aw.amount) - amount) <= 0.01,
+    );
+    const sameVendor = awaitings.filter(
+      (aw) =>
+        sameAccountName(aw.vendor, t.to_source) ||
+        sameAccountName(aw.vendor, t.from_source),
+    );
+    console.log(
+      `  NO MATCH: transfer ${t.id} ($${amount}, ${t.from_source}→${t.to_source}, ${t.date && (typeof t.date === "string" ? t.date.slice(0, 10) : new Date(t.date).toISOString().slice(0, 10))})`,
+    );
+    if (sameAmount.length === 0) {
+      console.log(
+        `    no outstanding awaiting-transfer with amount ≈ $${amount}`,
+      );
+    } else {
+      console.log(
+        `    amount-only candidates (vendor mismatch): ${sameAmount.map((a) => `${a.id}/${a.vendor}`).join(", ")}`,
+      );
+    }
+    if (sameVendor.length > 0) {
+      console.log(
+        `    vendor-only candidates (amount mismatch): ${sameVendor.map((a) => `${a.id}/$${a.amount}`).join(", ")}`,
+      );
+    }
     skippedNoMatch++;
     continue;
   }
