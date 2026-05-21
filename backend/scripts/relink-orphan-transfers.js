@@ -197,8 +197,10 @@ const refreshedAwaitings = await listAwaiting({ status: "all" });
 const chainMap = new Map(); // oldId → newId (which awaiting carries it)
 for (const aw of refreshedAwaitings) {
   const notes = String(aw.notes || "");
-  // Tolerate single-id or comma-separated lists.
-  const m = notes.match(/Carries forward:\s*([\w_,\s]+)/);
+  // Notes can use either " | " (carry-forward writer) or "\n" (overpayment
+  // appender) as a separator between annotation fields. Stop at either so
+  // the captured group is just the carries-forward id list.
+  const m = notes.match(/Carries forward:\s*([^|\n]+)/);
   if (!m) continue;
   const carriedIds = m[1]
     .split(",")
