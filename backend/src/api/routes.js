@@ -24,6 +24,7 @@ import {
   getKnownVendors,
   addStatement,
   getStatement,
+  listStatements,
   updateStatementLine,
   listStatementLines,
 } from "../ledger/index.js";
@@ -180,38 +181,64 @@ function findUniqueSubsetSummingTo(items, target, tolerance = 0.01) {
 }
 
 /**
+ * For an awaiting, find the next-period statement on the same source so
+ * we can compute the overpayment upper bound. The "next" statement is
+ * the one whose period starts at or after the awaiting's originating
+ * statement's period_end. Returns the statement row or null.
+ */
+async function findNextStatementForAwaiting(awaiting, allStatements) {
+  if (!awaiting?.statement_id) return null;
+  const origin = allStatements.find((s) => s.id === awaiting.statement_id);
+  if (!origin) return null;
+  const originEnd = origin.period_end ? new Date(origin.period_end) : null;
+  if (!originEnd) return null;
+  const after = allStatements
+    .filter(
+      (s) =>
+        s.id !== origin.id &&
+        sameAccountName(s.source, origin.source) &&
+        s.period_start &&
+        new Date(s.period_start) >= originEnd,
+    )
+    .sort(
+      (a, b) => new Date(a.period_start) - new Date(b.period_start),
+    );
+  return after[0] ?? null;
+}
+
+/**
  * Find the unique outstanding awaiting-transfer that the given Transfer
- * would settle, considering sum-matches across all unlinked Transfers.
- * The newly-created Transfer is passed as `newTransfer`; the caller
- * provides the rest of the unlinked Transfer rows so we can subset-sum.
+ * would settle. Two-pass match:
  *
- * Returns { awaiting, transfersToLink: [Transfer, ...] } when exactly
- * one awaiting + one subset summing to its amount can be uniquely
- * identified, AND the new Transfer is part of that subset. Otherwise
- * returns null.
+ *   Pass A — EXACT subset-sum. Any unique subset of unlinked Transfers
+ *   (each paying INTO the awaiting's vendor) summing to the awaiting's
+ *   amount within $0.01.
  *
- * Side rules:
- *   - awaiting.status === "awaiting"
- *   - awaiting.payment_kind === "transfer"
- *   - candidate Transfer.to_source matches awaiting.vendor by name or
- *     last-4 (we only consider transfers paying INTO the awaiting's
- *     vendor — money flowing out of a card to another account is
- *     unusual enough that we don't try to auto-link it).
+ *   Pass B — OVERPAYMENT within the carry-forward window. Single
+ *   Transfer (subset size 1) whose amount is in [awaiting.amount,
+ *   awaiting.amount + nextStatement.total_charges + $0.01]. Models the
+ *   common "paid the statement closing balance + a bit toward new
+ *   charges that accrued since the statement date" pattern. The
+ *   overshoot is implicitly carried forward by the next statement's
+ *   opening balance — already reflected in the data, we just need to
+ *   acknowledge the settlement.
+ *
+ * The new Transfer must be part of the winning match for either pass.
+ * Returns { awaiting, subset, mode, overpayment } or null. Ambiguous
+ * matches (multiple awaitings or multiple subsets) → null.
  */
 function findAutoLinkSubset({
   newTransfer,
   unlinkedTransfers,
   outstandingAwaitings,
+  nextStatementByAwaitingId,
 }) {
   const candidateAwaitings = outstandingAwaitings.filter(
     (aw) => (aw.payment_kind || "expense") === "transfer",
   );
-  const winners = []; // { awaiting, subset }
+  // Pass A — exact subset-sum.
+  const exactWinners = [];
   for (const aw of candidateAwaitings) {
-    // Eligible transfers: those whose to_source matches this awaiting's
-    // vendor (i.e. they're paying INTO this account). Always includes
-    // the new transfer when it qualifies — otherwise no match is
-    // possible by definition.
     const eligible = unlinkedTransfers.filter((t) =>
       sameAccountName(t.to_source, aw.vendor),
     );
@@ -220,10 +247,34 @@ function findAutoLinkSubset({
     const subset = findUniqueSubsetSummingTo(eligible, target, 0.01);
     if (!subset) continue;
     if (!subset.some((t) => t.id === newTransfer.id)) continue;
-    winners.push({ awaiting: aw, subset });
-    if (winners.length > 1) return null; // multiple awaitings ambiguous
+    exactWinners.push({ awaiting: aw, subset, mode: "exact" });
+    if (exactWinners.length > 1) return null;
   }
-  return winners.length === 1 ? winners[0] : null;
+  if (exactWinners.length === 1) return exactWinners[0];
+
+  // Pass B — single-transfer overpayment within carry-forward window.
+  const overpayWinners = [];
+  for (const aw of candidateAwaitings) {
+    if (!sameAccountName(newTransfer.to_source, aw.vendor)) continue;
+    const awAmount = Math.abs(Number(aw.amount));
+    const trAmount = Math.abs(Number(newTransfer.amount));
+    if (trAmount < awAmount) continue;
+    const nextStmt = nextStatementByAwaitingId.get(aw.id);
+    if (!nextStmt) continue;
+    const nextCharges = Number(nextStmt.total_charges);
+    if (!Number.isFinite(nextCharges) || nextCharges < 0) continue;
+    const upperBound = awAmount + nextCharges;
+    if (trAmount > upperBound + 0.01) continue;
+    overpayWinners.push({
+      awaiting: aw,
+      subset: [newTransfer],
+      mode: "overpayment",
+      overpayment: Math.round((trAmount - awAmount) * 100) / 100,
+      next_statement_id: nextStmt.id,
+    });
+    if (overpayWinners.length > 1) return null;
+  }
+  return overpayWinners.length === 1 ? overpayWinners[0] : null;
 }
 
 export default async function apiRoutes(fastify, opts) {
@@ -2012,13 +2063,18 @@ export default async function apiRoutes(fastify, opts) {
           created_by: "user",
         });
 
-        // ── Auto-link: 1:1 or N:1 (subset-sum) settlement detection ─────
+        // ── Auto-link: exact subset-sum OR carry-forward overpayment ────
         let autoLink = null;
         try {
-          const [allUnlinked, allAwaiting] = await Promise.all([
-            listTransfers().then((rows) => rows.filter((t) => !t.awaiting_id)),
-            listAwaiting({ status: "awaiting" }),
-          ]);
+          const [allUnlinked, allAwaiting, allStatements] = await Promise.all(
+            [
+              listTransfers().then((rows) =>
+                rows.filter((t) => !t.awaiting_id),
+              ),
+              listAwaiting({ status: "awaiting" }),
+              listStatements({ status: "all" }),
+            ],
+          );
           // The new Transfer is included in allUnlinked (just inserted,
           // awaiting_id is null until we link it below).
           const newTransfer = allUnlinked.find((t) => t.id === transferId) ?? {
@@ -2026,14 +2082,37 @@ export default async function apiRoutes(fastify, opts) {
             ...transferRow,
             awaiting_id: null,
           };
+          // Pre-compute next-statement lookup for each candidate awaiting.
+          // The overpayment-window pass needs the next-period total_charges
+          // to compute the acceptable upper bound.
+          const nextStatementByAwaitingId = new Map();
+          for (const aw of allAwaiting) {
+            const next = await findNextStatementForAwaiting(aw, allStatements);
+            if (next) nextStatementByAwaitingId.set(aw.id, next);
+          }
           autoLink = findAutoLinkSubset({
             newTransfer,
             unlinkedTransfers: allUnlinked,
             outstandingAwaitings: allAwaiting,
+            nextStatementByAwaitingId,
           });
           if (autoLink) {
             for (const t of autoLink.subset) {
               await updateTransfer(t.id, { awaiting_id: autoLink.awaiting.id });
+            }
+            // For overpayments, append a note that explains why the
+            // awaiting is being marked paid even though the amounts
+            // didn't exactly match — the overshoot was credited toward
+            // the next statement's opening balance.
+            if (autoLink.mode === "overpayment") {
+              const existingNotes = autoLink.awaiting.notes || "";
+              const overNote = `Overpaid by $${autoLink.overpayment.toFixed(2)} via xfer ${transferId} — applied to next statement (${autoLink.next_statement_id}).`;
+              const combinedNotes = existingNotes
+                ? `${existingNotes}\n${overNote}`
+                : overNote;
+              await updateAwaiting(autoLink.awaiting.id, {
+                notes: combinedNotes,
+              });
             }
             await markAwaitingPaid(autoLink.awaiting.id, {
               paid_transfer_id: transferId,
@@ -2063,6 +2142,8 @@ export default async function apiRoutes(fastify, opts) {
             auto_linked_subset: autoLink
               ? autoLink.subset.map((t) => t.id)
               : null,
+            auto_link_mode: autoLink?.mode ?? null,
+            overpayment: autoLink?.overpayment ?? null,
           },
           "statement line marked as transfer",
         );
@@ -2072,6 +2153,8 @@ export default async function apiRoutes(fastify, opts) {
           transfer_id: transferId,
           auto_linked_awaiting: autoLink?.awaiting?.id ?? null,
           auto_linked_subset_size: autoLink ? autoLink.subset.length : 0,
+          auto_link_mode: autoLink?.mode ?? null,
+          overpayment: autoLink?.overpayment ?? null,
         };
       } catch (err) {
         req.log.error(
