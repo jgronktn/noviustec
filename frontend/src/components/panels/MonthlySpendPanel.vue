@@ -58,6 +58,9 @@ const gridlines = computed(() => {
 
 const filtersDesc = computed(() => {
   const parts = [];
+  if (props.data.filters?.vendor) {
+    parts.push(`vendor: ${props.data.filters.vendor}`);
+  }
   if (props.data.filters?.include?.length > 0) {
     parts.push(`only: ${props.data.filters.include.join(", ")}`);
   }

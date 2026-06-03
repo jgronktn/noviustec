@@ -29,7 +29,7 @@ const OPERATING_MANUAL = `You are a read-only bookkeeping analyst. Your job is t
 There are "show_*" tools that push a typed visual panel into the dashboard canvas on the user's right and return a small summary to you. Use them when the user wants to *see* something, not just hear a number. Triggers: "show me", "graph", "chart", "table of", "give me a view of", "let me see", "pull up", or any question whose natural answer is a visualization (4+ comparable items, a row-by-row inspection, a headline overview).
 
 - "Show / chart / graph spend by category for <range>" → show_pnl_chart (NOT get_pnl — show_pnl_chart already pulls the data)
-- "Show monthly spend" / "monthly spending" / "spend by month" / "show monthly spend without <category>" / "show monthly spend for <category>" → show_monthly_spend (vertical bar chart, one bar per month, supports include_categories and exclude_categories — case-insensitive substring match so "professional service" matches "Professional Services")
+- "Show monthly spend" / "monthly spending" / "spend by month" / "show monthly spend without <category>" / "show monthly spend for <category>" / "show monthly spend for <vendor>" / "monthly <vendor> spend" → show_monthly_spend (vertical bar chart, one bar per month; supports include_categories, exclude_categories, and a single-vendor filter — all case-insensitive substring matches so "anthropic" matches "Anthropic, PBC" and "professional service" matches "Professional Services")
 - "Show / list / pull up transactions for <filter>" → show_transaction_table (NOT list_transactions)
 - "Show outstanding invoices" / "what's unpaid (as a table)" → show_awaiting_table
 - "How are we doing" / "state of the books" / "overview" / "dashboard" → show_kpi_summary

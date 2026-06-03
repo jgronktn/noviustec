@@ -638,6 +638,12 @@ export async function runTool(name, input) {
 
       let txns = await listTransactions({ from, to });
 
+      // Vendor filter — same case-insensitive substring shape used
+      // everywhere else in the agent ('anthropic' matches 'Anthropic, PBC').
+      if (args.vendor) {
+        txns = txns.filter((t) => vendorMatches(t.vendor, args.vendor));
+      }
+
       // Case-insensitive substring category filters — so 'travel'
       // matches 'Travel - Flights', 'Travel - Meals', etc.
       const include = (args.include_categories ?? []).map((c) =>
@@ -705,6 +711,7 @@ export async function runTool(name, input) {
       );
 
       const filterParts = [];
+      if (args.vendor) filterParts.push(`vendor=${args.vendor}`);
       if (include.length > 0)
         filterParts.push(`only ${args.include_categories.join(", ")}`);
       if (exclude.length > 0)
@@ -722,6 +729,7 @@ export async function runTool(name, input) {
             months: sorted,
             period: { from, to },
             filters: {
+              vendor: args.vendor ?? null,
               include: args.include_categories ?? [],
               exclude: args.exclude_categories ?? [],
             },

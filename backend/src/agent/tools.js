@@ -151,7 +151,7 @@ export const TOOL_DEFINITIONS = [
   {
     name: "show_monthly_spend",
     description:
-      "Render a vertical bar chart of total spend per month over a date range. Use for 'show monthly spend', 'spend by month', or any time the user wants to see month-over-month variation (distinct from show_pnl_chart, which groups by category across a single range). Supports include_categories (only count these) and exclude_categories (skip these) so prompts like 'show monthly spend without professional services' or 'show monthly travel spend' work in one call. Default range is the trailing 12 months ending today.",
+      "Render a vertical bar chart of total spend per month over a date range. Use for 'show monthly spend', 'spend by month', any time the user wants to see month-over-month variation, OR when they want a single vendor's monthly spend (pass `vendor`). Distinct from show_pnl_chart, which groups by category across a single range. Supports include_categories / exclude_categories and an optional `vendor` filter — so 'show monthly spend without professional services', 'show monthly travel spend', and 'show monthly spend for Anthropic' all work in one call. Default range is the trailing 12 months ending today.",
     input_schema: {
       type: "object",
       properties: {
@@ -162,6 +162,11 @@ export const TOOL_DEFINITIONS = [
         to: {
           type: "string",
           description: "Inclusive YYYY-MM-DD end. Defaults to today.",
+        },
+        vendor: {
+          type: "string",
+          description:
+            "Filter to a single vendor (case-insensitive substring match — 'anthropic' matches 'Anthropic, PBC'). Use for 'show monthly spend for <vendor>' / 'monthly Anthropic spend'.",
         },
         include_categories: {
           type: "array",
