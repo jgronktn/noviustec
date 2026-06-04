@@ -94,6 +94,35 @@ export const deleteTransaction = (token, id) =>
   request(token, "DELETE", `/api/transactions/${encodeURIComponent(id)}`);
 
 /**
+ * Search existing GL transactions for the "Link existing payment"
+ * picker. Filters by vendor (substring) and optional date range.
+ * Each row carries `already_linked` and `already_linked_to` (an
+ * awaiting id) when some other awaiting already settles it.
+ */
+export const searchTransactions = (token, { vendor, from, to, limit } = {}) => {
+  const params = new URLSearchParams();
+  if (vendor) params.set("vendor", vendor);
+  if (from) params.set("from", from);
+  if (to) params.set("to", to);
+  if (limit) params.set("limit", String(limit));
+  const qs = params.toString();
+  return request(token, "GET", `/api/transactions${qs ? `?${qs}` : ""}`);
+};
+
+/**
+ * Link an outstanding awaiting to an existing GL transaction (rather
+ * than creating a new one via Record-payment). The awaiting flips to
+ * paid; its Documents rows get re-attached to the linked txn.
+ */
+export const linkExistingTxnToAwaiting = (token, awaitingId, txnId) =>
+  request(
+    token,
+    "POST",
+    `/api/awaiting/${encodeURIComponent(awaitingId)}/link-txn`,
+    { txn_id: txnId },
+  );
+
+/**
  * Create a new GL transaction. Used by TransactionDraftPanel when the
  * user clicks Approve on an agent-proposed draft. The agent itself
  * NEVER calls this endpoint — propose_transaction renders a panel,

@@ -1,7 +1,8 @@
 <script setup>
-import { computed, onMounted, onBeforeUnmount } from "vue";
+import { computed, ref, onMounted, onBeforeUnmount } from "vue";
 import RecordPaymentForm from "./RecordPaymentForm.vue";
 import RecordTransferForm from "./RecordTransferForm.vue";
+import LinkExistingPayment from "./LinkExistingPayment.vue";
 
 const props = defineProps({
   // { id, vendor, amount, currency, reference_number?, date?, payment_kind? }
@@ -16,6 +17,11 @@ const emit = defineEmits(["success", "cancel"]);
 const isTransfer = computed(
   () => (props.awaiting.payment_kind || "expense") === "transfer",
 );
+
+// Tab state for expense awaitings — "new" creates a fresh GL row,
+// "link" attaches to an existing one. Transfer awaitings always use
+// the transfer form; no tab toggle is shown.
+const mode = ref("new"); // "new" | "link"
 
 function onKeyDown(e) {
   if (e.key === "Escape") emit("cancel");
@@ -56,12 +62,34 @@ onBeforeUnmount(() => {
         @success="emit('success')"
         @cancel="emit('cancel')"
       />
-      <RecordPaymentForm
-        v-else
-        :awaiting="awaiting"
-        @success="emit('success')"
-        @cancel="emit('cancel')"
-      />
+      <template v-else>
+        <div class="rpd-tabs" role="tablist">
+          <button
+            type="button"
+            class="rpd-tab"
+            :class="{ active: mode === 'new' }"
+            @click="mode = 'new'"
+          >New payment</button>
+          <button
+            type="button"
+            class="rpd-tab"
+            :class="{ active: mode === 'link' }"
+            @click="mode = 'link'"
+          >Link existing</button>
+        </div>
+        <RecordPaymentForm
+          v-if="mode === 'new'"
+          :awaiting="awaiting"
+          @success="emit('success')"
+          @cancel="emit('cancel')"
+        />
+        <LinkExistingPayment
+          v-else
+          :awaiting="awaiting"
+          @success="emit('success')"
+          @cancel="emit('cancel')"
+        />
+      </template>
     </div>
   </div>
 </template>
@@ -134,5 +162,33 @@ onBeforeUnmount(() => {
 .rpd-close:hover {
   background: #f0f0eb;
   color: var(--text);
+}
+
+.rpd-tabs {
+  display: flex;
+  gap: 0.3rem;
+  margin-bottom: 0.85rem;
+  border-bottom: 1px solid var(--border);
+}
+
+.rpd-tab {
+  background: transparent;
+  border: none;
+  border-bottom: 2px solid transparent;
+  padding: 0.4rem 0.75rem;
+  font-size: 0.82rem;
+  color: var(--text-muted);
+  cursor: pointer;
+  margin-bottom: -1px;
+}
+
+.rpd-tab:hover {
+  color: var(--text);
+}
+
+.rpd-tab.active {
+  color: var(--text);
+  border-bottom-color: var(--accent);
+  font-weight: 600;
 }
 </style>

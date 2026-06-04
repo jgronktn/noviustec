@@ -19,6 +19,7 @@ import {
   addTransaction,
   updateTransaction,
   deleteTransaction,
+  listTransactions,
   updateAwaiting,
   getLedgerPath,
   getDocument,
@@ -1281,6 +1282,157 @@ export default async function apiRoutes(fastify, opts) {
         awaiting_id: req.params.id,
         transaction_id: transactionId,
         action: "manual_pay",
+      };
+    },
+  );
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // GET /api/transactions?vendor=...&from=...&to=...&limit=50
+  // Read-only list endpoint used by the "Link existing payment" picker
+  // in RecordPaymentDialog. Each row carries an `already_linked` flag —
+  // true when some AwaitingPayment row already has paid_txn_id = this
+  // row's id, so the picker can warn before linking again.
+  // ─────────────────────────────────────────────────────────────────────────
+  fastify.get("/api/transactions", async (req, reply) => {
+    try {
+      const limit = Math.min(
+        Math.max(Number(req.query.limit) || 50, 1),
+        200,
+      );
+      const all = await listTransactions({
+        from: req.query.from,
+        to: req.query.to,
+      });
+      const v = String(req.query.vendor || "").trim().toLowerCase();
+      let rows = v
+        ? all.filter((r) =>
+            String(r.vendor || "")
+              .toLowerCase()
+              .includes(v),
+          )
+        : all;
+
+      // Sort newest-first.
+      rows.sort((a, b) => {
+        const da = a.date ? new Date(a.date).getTime() : 0;
+        const db = b.date ? new Date(b.date).getTime() : 0;
+        return db - da;
+      });
+      rows = rows.slice(0, limit);
+
+      // Mark rows that already settle some awaiting so the picker can
+      // surface that and avoid silent re-linking.
+      const allAwaiting = await listAwaiting({ status: "all" });
+      const linkedTxnIds = new Map();
+      for (const a of allAwaiting) {
+        if (a.paid_txn_id) linkedTxnIds.set(a.paid_txn_id, a.id);
+      }
+      return rows.map((r) => ({
+        id: r.id,
+        date: r.date,
+        vendor: r.vendor,
+        amount: r.amount,
+        currency: r.currency ?? "USD",
+        category: r.category,
+        payment_source: r.payment_source,
+        reference_number: r.reference_number,
+        reference_kind: r.reference_kind,
+        description: r.description,
+        already_linked: linkedTxnIds.has(r.id),
+        already_linked_to: linkedTxnIds.get(r.id) ?? null,
+      }));
+    } catch (err) {
+      req.log.error(
+        { err: err.message },
+        "GET /api/transactions failed",
+      );
+      return reply.code(500).send({ error: err.message });
+    }
+  });
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // POST /api/awaiting/:id/link-txn — attach an outstanding awaiting to
+  // an EXISTING GL transaction (one that was booked some other way —
+  // parser approval, propose_transaction, etc.) rather than creating a
+  // brand new row. Used by the "Link existing payment" tab in the
+  // RecordPaymentDialog.
+  //
+  // Cascade-safe: refuses if the target txn already settles a different
+  // awaiting. Re-attaches the awaiting's Documents rows to the txn so
+  // the invoice → payment link is intact going forward.
+  // ─────────────────────────────────────────────────────────────────────────
+  fastify.post(
+    "/api/awaiting/:id/link-txn",
+    {
+      schema: {
+        body: {
+          type: "object",
+          required: ["txn_id"],
+          additionalProperties: false,
+          properties: {
+            txn_id: { type: "string", minLength: 1 },
+          },
+        },
+      },
+    },
+    async (req, reply) => {
+      const awaiting = await getAwaiting(req.params.id);
+      if (!awaiting) {
+        return reply.code(404).send({ error: "AwaitingPayment row not found" });
+      }
+      if (awaiting.status !== "awaiting") {
+        return reply.code(409).send({
+          error: `Cannot link a payment to an awaiting with status=${awaiting.status}`,
+        });
+      }
+      const txn = await getTransaction(req.body.txn_id);
+      if (!txn) {
+        return reply.code(404).send({ error: "Transaction not found" });
+      }
+
+      // Refuse if the target txn already settles a different awaiting.
+      const allAwaiting = await listAwaiting({ status: "all" });
+      const claimant = allAwaiting.find(
+        (a) => a.paid_txn_id === txn.id && a.id !== awaiting.id,
+      );
+      if (claimant) {
+        return reply.code(409).send({
+          error: `Transaction ${txn.id} already settles awaiting ${claimant.id} (${claimant.vendor}). Unlink it first.`,
+        });
+      }
+
+      // Re-attach the awaiting's invoice docs to the GL row so the
+      // invoice→payment relationship is preserved in Documents.
+      try {
+        await attachDocumentsToTransaction({
+          awaiting_id: awaiting.id,
+          txn_id: txn.id,
+        });
+      } catch (err) {
+        req.log.error(
+          { err: err.message, awaiting_id: awaiting.id, txn_id: txn.id },
+          "attachDocumentsToTransaction during link failed; continuing",
+        );
+      }
+
+      await markAwaitingPaid(awaiting.id, { paid_txn_id: txn.id });
+
+      req.log.info(
+        {
+          awaiting_id: awaiting.id,
+          txn_id: txn.id,
+          action: "link_existing_txn",
+          vendor: awaiting.vendor,
+          awaiting_amount: awaiting.amount,
+          txn_amount: txn.amount,
+        },
+        "awaiting linked to existing transaction",
+      );
+
+      return {
+        awaiting_id: awaiting.id,
+        transaction_id: txn.id,
+        action: "link_existing_txn",
       };
     },
   );
