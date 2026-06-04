@@ -85,6 +85,15 @@ export const updateTransaction = (token, id, body) =>
   request(token, "PATCH", `/api/transactions/${encodeURIComponent(id)}`, body);
 
 /**
+ * Delete a GL transaction. Returns 409 with a `blockers` array when
+ * the row is referenced by statement lines, awaiting rows, or
+ * Documents — the dialog surfaces those reasons so the user knows
+ * what to unlink first.
+ */
+export const deleteTransaction = (token, id) =>
+  request(token, "DELETE", `/api/transactions/${encodeURIComponent(id)}`);
+
+/**
  * Create a new GL transaction. Used by TransactionDraftPanel when the
  * user clicks Approve on an agent-proposed draft. The agent itself
  * NEVER calls this endpoint — propose_transaction renders a panel,

@@ -110,6 +110,29 @@ export async function updateTransaction(id, patch) {
   });
 }
 
+/**
+ * Remove a GL row by id. Returns { id, deleted: true } on success;
+ * throws if not found. Cascade safety is the caller's responsibility
+ * — this just deletes the row from the sheet. The route handler
+ * checks FKs (statement-line links, awaiting paid_txn_id, Documents
+ * rows) before invoking this.
+ */
+export async function deleteTransaction(id) {
+  return withWorkbookWrite(async (wb) => {
+    const sheet = wb.getWorksheet(SHEETS.GL);
+    let targetRowNumber = null;
+    sheet.eachRow({ includeEmpty: false }, (row, rowNumber) => {
+      if (rowNumber === 1) return;
+      if (row.getCell("id").value === id) targetRowNumber = rowNumber;
+    });
+    if (targetRowNumber === null) {
+      throw new Error(`GL row not found: ${id}`);
+    }
+    sheet.spliceRows(targetRowNumber, 1);
+    return { id, deleted: true };
+  });
+}
+
 export async function listTransactions({ from, to, category, payment_source } = {}) {
   return withWorkbookRead(async (wb) => {
     const sheet = wb.getWorksheet(SHEETS.GL);

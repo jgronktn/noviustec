@@ -18,6 +18,7 @@ import {
   updatePendingFromParse,
   addTransaction,
   updateTransaction,
+  deleteTransaction,
   updateAwaiting,
   getLedgerPath,
   getDocument,
@@ -27,6 +28,7 @@ import {
   listStatements,
   updateStatementLine,
   listStatementLines,
+  listDocuments,
 } from "../ledger/index.js";
 import { parseReceipt } from "../parser/index.js";
 import {
@@ -1045,6 +1047,75 @@ export default async function apiRoutes(fastify, opts) {
       }
     },
   );
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // DELETE /api/transactions/:id — remove a GL row. Cascade-safe: refuses
+  // when the row is referenced by any other sheet, with a helpful error
+  // body listing what would need to be unlinked first. Used by the
+  // EditTransactionDialog's Delete button (with a confirm step on the
+  // frontend).
+  // ─────────────────────────────────────────────────────────────────────────
+  fastify.delete("/api/transactions/:id", async (req, reply) => {
+    const txnId = req.params.id;
+    try {
+      const existing = await getTransaction(txnId);
+      if (!existing) {
+        return reply.code(404).send({ error: "Transaction not found" });
+      }
+
+      // FK checks — refuse the delete if anything points at this row.
+      const blockers = [];
+
+      const [allLines, allAwaiting, allDocs] = await Promise.all([
+        listStatementLines(),
+        listAwaiting({ status: "all" }),
+        listDocuments(),
+      ]);
+
+      const linkedLine = allLines.find((l) => l.matched_txn_id === txnId);
+      if (linkedLine) {
+        blockers.push(
+          `Matched on statement line ${linkedLine.id} — unmatch it first (reconciliation panel).`,
+        );
+      }
+      const linkedAwaiting = allAwaiting.find((a) => a.paid_txn_id === txnId);
+      if (linkedAwaiting) {
+        blockers.push(
+          `Settles awaiting ${linkedAwaiting.id} (${linkedAwaiting.vendor}) — record a different payment first, or void the awaiting.`,
+        );
+      }
+      const linkedDocs = allDocs.filter((d) => d.txn_id === txnId);
+      if (linkedDocs.length > 0) {
+        blockers.push(
+          `${linkedDocs.length} Document row(s) point at this transaction (${linkedDocs.map((d) => d.id).join(", ")}). Detach or delete them first.`,
+        );
+      }
+
+      if (blockers.length > 0) {
+        return reply.code(409).send({
+          error: "Cannot delete — other rows reference this transaction.",
+          blockers,
+        });
+      }
+
+      const result = await deleteTransaction(txnId);
+      req.log.info(
+        {
+          txn_id: txnId,
+          vendor: existing.vendor,
+          amount: existing.amount,
+        },
+        "transaction deleted",
+      );
+      return result;
+    } catch (err) {
+      req.log.error(
+        { err: err.message, txn_id: txnId },
+        "deleteTransaction failed",
+      );
+      return reply.code(500).send({ error: err.message });
+    }
+  });
 
   // ─────────────────────────────────────────────────────────────────────────
   // PATCH /api/awaiting/:id — edit an AwaitingPayment row from the timeline.

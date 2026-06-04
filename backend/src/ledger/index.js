@@ -16,6 +16,7 @@ export {
   listTransactions,
   getTransaction,
   updateTransaction,
+  deleteTransaction,
 } from "./transactions.js";
 export {
   addDocument,

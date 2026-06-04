@@ -171,6 +171,19 @@ const TXN_TABLE_LIMIT = 100;
 
 const TIMELINE_OVERDUE_DAYS = 30;
 
+// reference_kind values that describe the payment METHOD, not a
+// document/artifact from the vendor. These never get a left-side
+// "doc fallback" card on the timeline — the left side is for
+// invoices/receipts/orders the vendor sent, not the mechanism we
+// used to pay. Used by buildTimelineProps.
+const PAYMENT_METHOD_KINDS = new Set([
+  "check",
+  "card",
+  "ach",
+  "wire",
+  "cash",
+]);
+
 /**
  * Build the timeline panel payload. Used by:
  *  - show_vendor_timeline (agent tool, vendor required)
@@ -371,6 +384,15 @@ export async function buildTimelineProps({ vendor = null, from, to } = {}) {
     // PDF, or an old GL row archived before the Documents sheet existed).
     // Skip if the GL row itself has no reference_kind — nothing to show.
     if (!r.reference_kind) continue;
+    // Skip payment-method kinds. These describe HOW the money moved
+    // (check, card, ACH, wire, cash), not a paper artifact from the
+    // vendor — emitting a left card for them double-counts the payment
+    // (already on the right side as the GL row). The fallback exists
+    // to surface artifacts like invoices/receipts/orders that arrived
+    // without a Documents sheet entry.
+    if (PAYMENT_METHOD_KINDS.has(String(r.reference_kind).toLowerCase())) {
+      continue;
+    }
     leftEvents.push({
       id: `${r.id}-doc`,
       txn_id: r.id,

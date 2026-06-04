@@ -3,6 +3,7 @@ import { ref, onMounted, onBeforeUnmount, inject } from "vue";
 import {
   fetchTransaction,
   updateTransaction,
+  deleteTransaction,
   getCategories,
   getPaymentSources,
 } from "../api.js";
@@ -37,7 +38,10 @@ const REFERENCE_KINDS = [
 
 const loading = ref(true);
 const submitting = ref(false);
+const deleting = ref(false);
+const confirmingDelete = ref(false);
 const error = ref(null);
+const blockers = ref(null);
 const form = ref(null);
 const original = ref(null);
 const categories = ref([]);
@@ -132,6 +136,28 @@ async function save() {
     error.value = e.message || "Save failed.";
   } finally {
     submitting.value = false;
+  }
+}
+
+async function doDelete() {
+  error.value = null;
+  blockers.value = null;
+  deleting.value = true;
+  try {
+    await deleteTransaction(token.value, props.txnId);
+    emit("success");
+  } catch (e) {
+    // Surface the server's blocker list verbatim when present (409
+    // Conflict). Falls through to a generic message otherwise.
+    if (e?.data?.blockers && Array.isArray(e.data.blockers)) {
+      blockers.value = e.data.blockers;
+      error.value = e.data.error || "Cannot delete.";
+    } else {
+      error.value = e.message || "Delete failed.";
+    }
+    confirmingDelete.value = false;
+  } finally {
+    deleting.value = false;
   }
 }
 
@@ -233,12 +259,33 @@ function fmtAmount(n, currency = "USD") {
         </label>
 
         <p v-if="error" class="ed-error">{{ error }}</p>
+        <ul v-if="blockers && blockers.length > 0" class="ed-blockers">
+          <li v-for="(b, i) in blockers" :key="i">{{ b }}</li>
+        </ul>
 
         <div class="ed-actions">
-          <button type="button" class="ghost" :disabled="submitting" @click="emit('cancel')">
+          <button
+            type="button"
+            class="danger ghost-danger"
+            :disabled="submitting || deleting"
+            @click="confirmingDelete = !confirmingDelete"
+          >
+            {{ confirmingDelete ? "Cancel delete" : "Delete" }}
+          </button>
+          <button
+            v-if="confirmingDelete"
+            type="button"
+            class="danger"
+            :disabled="deleting"
+            @click="doDelete"
+          >
+            {{ deleting ? "Deleting…" : "Confirm delete" }}
+          </button>
+          <span class="ed-spacer" />
+          <button type="button" class="ghost" :disabled="submitting || deleting" @click="emit('cancel')">
             Cancel
           </button>
-          <button type="submit" class="primary" :disabled="submitting">
+          <button type="submit" class="primary" :disabled="submitting || deleting || confirmingDelete">
             {{ submitting ? "Saving…" : "Save changes" }}
           </button>
         </div>
@@ -394,12 +441,46 @@ function fmtAmount(n, currency = "USD") {
   border-radius: 4px;
 }
 
+.ed-blockers {
+  margin: 0;
+  padding: 0.35rem 0.55rem 0.35rem 1.4rem;
+  background: #fffbeb;
+  border: 1px solid #fde68a;
+  border-radius: 4px;
+  font-size: 0.78rem;
+  color: #92400e;
+  line-height: 1.4;
+}
+
 .ed-actions {
   display: flex;
   align-items: center;
   gap: 0.5rem;
   justify-content: flex-end;
   margin-top: 0.4rem;
+}
+
+.ed-spacer {
+  flex: 1 1 auto;
+}
+
+button.danger {
+  background: var(--danger);
+  border: 1px solid var(--danger);
+  color: white;
+  font-size: 0.8rem;
+  padding: 0.35rem 0.85rem;
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+button.danger.ghost-danger {
+  background: transparent;
+  color: var(--danger);
+}
+
+button.danger.ghost-danger:hover:not(:disabled) {
+  background: #fef2f2;
 }
 
 button.ghost {
