@@ -1,5 +1,6 @@
 <script setup>
 import { computed, ref, inject } from "vue";
+import AddPaymentDialog from "../AddPaymentDialog.vue";
 
 const props = defineProps({
   data: { type: Object, required: true },
@@ -8,6 +9,17 @@ const props = defineProps({
 // Provided by App.vue. Optional so the component still renders fine in
 // contexts where the dialogs aren't mounted.
 const openEditDialog = inject("openEditDialog", null);
+const signalLedgerChange = inject("signalLedgerChange", () => {});
+
+// Quick "add payment" modal, toggled by the button at the top of the
+// right side. Direct-write — no agent proposal step — for fast manual
+// entry of checks / card charges / etc.
+const showAddPayment = ref(false);
+
+function onAddPaymentSuccess() {
+  showAddPayment.value = false;
+  signalLedgerChange();
+}
 
 // Pair-highlight state kept (currently unused — click-to-highlight was
 // retired in favor of click-to-edit; keeping the ref so a future
@@ -219,6 +231,12 @@ const monthGroups = computed(() => {
           <div class="vt-total vt-total-right">
             <span class="vt-total-label">Payments</span>
             <span class="vt-total-amount">{{ fmt(data.summary.total_right) }}</span>
+            <button
+              class="vt-add-payment"
+              type="button"
+              title="Quick-add a payment (check, card, ACH, wire, cash)"
+              @click="showAddPayment = true"
+            >+ Add payment</button>
           </div>
         </div>
       </div>
@@ -329,6 +347,15 @@ const monthGroups = computed(() => {
         </template>
       </section>
     </div>
+
+    <!-- Quick-add payment modal triggered from the right-side header.
+         Lives at the root level so its fixed-position backdrop covers
+         the whole canvas, not just the timeline. -->
+    <AddPaymentDialog
+      v-if="showAddPayment"
+      @success="onAddPaymentSuccess"
+      @cancel="showAddPayment = false"
+    />
   </div>
 </template>
 
@@ -424,6 +451,25 @@ const monthGroups = computed(() => {
 
 .vt-total-right {
   align-self: flex-start;
+}
+
+.vt-add-payment {
+  margin-top: 0.35rem;
+  font-size: 0.7rem;
+  padding: 0.3rem 0.6rem;
+  background: var(--surface);
+  border: 1px solid var(--accent);
+  color: var(--accent);
+  border-radius: 4px;
+  cursor: pointer;
+  font-weight: 600;
+  align-self: flex-start;
+  transition: background 0.15s, color 0.15s;
+}
+
+.vt-add-payment:hover {
+  background: var(--accent);
+  color: white;
 }
 
 .vt-total-label {
