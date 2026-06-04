@@ -84,6 +84,15 @@ export const fetchAwaiting = (token, id) =>
 export const updateTransaction = (token, id, body) =>
   request(token, "PATCH", `/api/transactions/${encodeURIComponent(id)}`, body);
 
+/**
+ * Create a new GL transaction. Used by TransactionDraftPanel when the
+ * user clicks Approve on an agent-proposed draft. The agent itself
+ * NEVER calls this endpoint — propose_transaction renders a panel,
+ * and only this approve-click path writes to the ledger.
+ */
+export const createTransaction = (token, body) =>
+  request(token, "POST", "/api/transactions", body);
+
 /** Edit an AwaitingPayment row (status / paid_txn_id are not patchable here — use Record-payment). */
 export const updateAwaiting = (token, id, body) =>
   request(token, "PATCH", `/api/awaiting/${encodeURIComponent(id)}`, body);

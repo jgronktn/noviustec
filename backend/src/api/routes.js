@@ -883,6 +883,86 @@ export default async function apiRoutes(fastify, opts) {
   });
 
   // ─────────────────────────────────────────────────────────────────────────
+  // POST /api/transactions — create a GL row from an agent-proposed
+  // draft AFTER the user clicks Approve in TransactionDraftPanel. This
+  // is the ONE write path for the propose-then-approve flow: the agent
+  // never calls this; the frontend panel does, in response to a human
+  // click.
+  // ─────────────────────────────────────────────────────────────────────────
+  fastify.post(
+    "/api/transactions",
+    {
+      schema: {
+        body: {
+          type: "object",
+          required: ["vendor", "amount", "date", "category"],
+          additionalProperties: false,
+          properties: {
+            vendor: { type: "string", minLength: 1 },
+            amount: { type: "number" }, // positive expense amount
+            date: { type: "string", minLength: 1 }, // YYYY-MM-DD
+            category: { type: "string", minLength: 1 },
+            payment_source: { type: "string" },
+            currency: { type: "string", default: "USD" },
+            reference_number: { type: "string" },
+            reference_kind: { type: "string" }, // check | card | ach | wire | cash | other
+            description: { type: "string" },
+            notes: { type: "string" },
+          },
+        },
+      },
+    },
+    async (req, reply) => {
+      try {
+        // If a payment_source was given, register it (so it shows in
+        // future Sources dropdowns even if it's a brand-new account).
+        let canonicalSource = req.body.payment_source || null;
+        if (canonicalSource) {
+          try {
+            const { name } = await ensurePaymentSource(canonicalSource);
+            if (name) canonicalSource = name;
+          } catch (err) {
+            req.log.error(
+              { err: err.message },
+              "ensurePaymentSource failed on agent-proposed txn; continuing",
+            );
+          }
+        }
+        const { id: transactionId } = await addTransaction({
+          date: req.body.date,
+          vendor: req.body.vendor,
+          description: req.body.description || "",
+          category: req.body.category,
+          payment_source: canonicalSource,
+          amount: Math.abs(Number(req.body.amount)),
+          currency: req.body.currency || "USD",
+          reference_number: req.body.reference_number || null,
+          reference_kind: req.body.reference_kind || null,
+          notes: req.body.notes || "",
+          created_by: "agent-proposal",
+        });
+        req.log.info(
+          {
+            transaction_id: transactionId,
+            vendor: req.body.vendor,
+            amount: req.body.amount,
+            category: req.body.category,
+            payment_source: canonicalSource,
+          },
+          "transaction booked from agent proposal",
+        );
+        return { transaction_id: transactionId };
+      } catch (err) {
+        req.log.error(
+          { err: err.message },
+          "agent-proposed transaction write failed",
+        );
+        return reply.code(500).send({ error: err.message });
+      }
+    },
+  );
+
+  // ─────────────────────────────────────────────────────────────────────────
   // GET /api/transactions/:id — single GL row by id. Used by the timeline
   // edit dialog to fetch the full record (notes, description, etc.) that
   // the timeline event doesn't carry.

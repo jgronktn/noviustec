@@ -12,6 +12,7 @@ import FileListPanel from "./panels/FileListPanel.vue";
 import VendorTimelinePanel from "./panels/VendorTimelinePanel.vue";
 import StatementsListPanel from "./panels/StatementsListPanel.vue";
 import ReconciliationPanel from "./panels/ReconciliationPanel.vue";
+import TransactionDraftPanel from "./panels/TransactionDraftPanel.vue";
 
 const props = defineProps({
   token: { type: String, required: true },
@@ -46,6 +47,7 @@ const KIND_TO_COMPONENT = {
   statement_timeline: VendorTimelinePanel,
   statements_list: StatementsListPanel,
   reconciliation: ReconciliationPanel,
+  transaction_draft: TransactionDraftPanel,
 };
 
 function componentFor(kind) {

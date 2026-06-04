@@ -768,6 +768,44 @@ export async function runTool(name, input) {
       };
     }
 
+    case "propose_transaction": {
+      // No ledger write. Just package the agent's proposed values into
+      // a draft panel for the user to review, edit, and approve. The
+      // panel calls POST /api/transactions on Approve — that's the
+      // ONLY path that writes a GL row from this flow.
+      const today = new Date().toISOString().slice(0, 10);
+      const proposal = {
+        vendor: String(args.vendor || "").trim(),
+        amount:
+          args.amount == null
+            ? null
+            : Math.abs(Math.round(Number(args.amount) * 100) / 100),
+        date: args.date || today,
+        category: args.category || "",
+        payment_source: args.payment_source || "",
+        reference_kind: args.reference_kind || "",
+        reference_number: args.reference_number || "",
+        description: args.description || "",
+        notes: args.notes || "",
+        currency: "USD",
+      };
+      const title =
+        proposal.amount != null && proposal.vendor
+          ? `Draft transaction · ${proposal.vendor} · $${proposal.amount.toFixed(2)}`
+          : "Draft transaction";
+      return {
+        __panel: {
+          kind: "transaction_draft",
+          title,
+          props: { proposal },
+        },
+        // Echo what the agent proposed back into its own context so it
+        // can refer to the draft in follow-up turns ("approve it",
+        // "change the date to ...") if useful.
+        proposal,
+      };
+    }
+
     case "show_transaction_table": {
       const rows = await listTransactions({
         from: args.from,

@@ -188,6 +188,54 @@ export const TOOL_DEFINITIONS = [
     },
   },
   {
+    name: "propose_transaction",
+    description:
+      "Draft a new GL transaction for the user to approve. Use when the user describes paying someone manually (check, credit card, ACH, wire, cash) and wants it booked into the ledger — phrases like 'book a $42 check to Joe's Garage', 'I paid X for Y', 'add a payment to the ledger', 'log this credit card charge'. NEVER writes to the ledger directly — it renders a draft panel on the canvas with all fields the user can edit, and ONLY the user's Approve click writes the GL row. Fill in everything you can infer from the user's prompt (vendor, amount, date, description, reference_kind); leave gaps blank if you're not sure (the user fills them in). Do NOT use this for paying down an outstanding awaiting invoice (use the Record Payment dialog on the awaiting card instead) or for reconciling a statement line (use the reconciliation panel's Book-as-new instead). If unsure whether the user wants this or one of those flows, ASK.",
+    input_schema: {
+      type: "object",
+      required: ["vendor", "amount"],
+      properties: {
+        vendor: {
+          type: "string",
+          description: "Who got paid (e.g. 'Joe's Garage', 'Anthropic, PBC').",
+        },
+        amount: {
+          type: "number",
+          description: "Positive dollar amount (the system tracks expenses as positive numbers; sign comes from the GL convention).",
+        },
+        date: {
+          type: "string",
+          description: "Payment date as YYYY-MM-DD. Defaults to today if omitted.",
+        },
+        category: {
+          type: "string",
+          description: "GL category (exact match to a row in Categories sheet, e.g. 'Bank Fees', 'Office Supplies'). Leave blank if you're not sure — the user picks from a dropdown in the draft panel.",
+        },
+        payment_source: {
+          type: "string",
+          description: "Which account/card the payment came from (exact match to a row in Sources, e.g. 'Business Advantage Fundamentals™ Banking ••9934'). Leave blank if not sure.",
+        },
+        reference_kind: {
+          type: "string",
+          enum: ["check", "card", "ach", "wire", "cash", "other"],
+          description: "How the payment was made. Infer from the user's prompt: 'check' if they say 'check', 'card' for credit card, 'ach' for bank transfer, 'wire' for wire, 'cash' for cash.",
+        },
+        reference_number: {
+          type: "string",
+          description: "Optional check number, confirmation number, or other reference id.",
+        },
+        description: {
+          type: "string",
+          description: "Short description of what was paid for (e.g. 'car repairs', 'monthly retainer').",
+        },
+        notes: {
+          type: "string",
+          description: "Optional longer notes.",
+        },
+      },
+    },
+  },
+  {
     name: "show_transaction_table",
     description:
       "Render a table of GL transactions in the dashboard. Use when the user wants to inspect individual rows for a date range, category, vendor, or payment source. Caps at 100 rows.",
