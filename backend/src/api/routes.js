@@ -1320,27 +1320,40 @@ export default async function apiRoutes(fastify, opts) {
       });
       rows = rows.slice(0, limit);
 
-      // Mark rows that already settle some awaiting so the picker can
-      // surface that and avoid silent re-linking.
+      // Mark rows that already settle one or more awaitings. Multi-link
+      // is legitimate (one payment for several invoices) — the picker
+      // shows the count as context, not as a block.
       const allAwaiting = await listAwaiting({ status: "all" });
-      const linkedTxnIds = new Map();
+      const linkedByTxnId = new Map();
       for (const a of allAwaiting) {
-        if (a.paid_txn_id) linkedTxnIds.set(a.paid_txn_id, a.id);
+        if (!a.paid_txn_id) continue;
+        if (!linkedByTxnId.has(a.paid_txn_id)) {
+          linkedByTxnId.set(a.paid_txn_id, []);
+        }
+        linkedByTxnId.get(a.paid_txn_id).push({
+          id: a.id,
+          vendor: a.vendor,
+          amount: a.amount,
+        });
       }
-      return rows.map((r) => ({
-        id: r.id,
-        date: r.date,
-        vendor: r.vendor,
-        amount: r.amount,
-        currency: r.currency ?? "USD",
-        category: r.category,
-        payment_source: r.payment_source,
-        reference_number: r.reference_number,
-        reference_kind: r.reference_kind,
-        description: r.description,
-        already_linked: linkedTxnIds.has(r.id),
-        already_linked_to: linkedTxnIds.get(r.id) ?? null,
-      }));
+      return rows.map((r) => {
+        const links = linkedByTxnId.get(r.id) ?? [];
+        return {
+          id: r.id,
+          date: r.date,
+          vendor: r.vendor,
+          amount: r.amount,
+          currency: r.currency ?? "USD",
+          category: r.category,
+          payment_source: r.payment_source,
+          reference_number: r.reference_number,
+          reference_kind: r.reference_kind,
+          description: r.description,
+          already_linked: links.length > 0,
+          already_linked_count: links.length,
+          already_linked_awaitings: links,
+        };
+      });
     } catch (err) {
       req.log.error(
         { err: err.message },
@@ -1390,16 +1403,14 @@ export default async function apiRoutes(fastify, opts) {
         return reply.code(404).send({ error: "Transaction not found" });
       }
 
-      // Refuse if the target txn already settles a different awaiting.
+      // Multi-link is legitimate — one GL payment can settle several
+      // awaiting invoices from the same vendor (or different vendors,
+      // for grouped payments like a check covering multiple bills).
+      // We just log it for the audit trail.
       const allAwaiting = await listAwaiting({ status: "all" });
-      const claimant = allAwaiting.find(
+      const alsoLinked = allAwaiting.filter(
         (a) => a.paid_txn_id === txn.id && a.id !== awaiting.id,
       );
-      if (claimant) {
-        return reply.code(409).send({
-          error: `Transaction ${txn.id} already settles awaiting ${claimant.id} (${claimant.vendor}). Unlink it first.`,
-        });
-      }
 
       // Re-attach the awaiting's invoice docs to the GL row so the
       // invoice→payment relationship is preserved in Documents.
@@ -1425,6 +1436,7 @@ export default async function apiRoutes(fastify, opts) {
           vendor: awaiting.vendor,
           awaiting_amount: awaiting.amount,
           txn_amount: txn.amount,
+          also_settles: alsoLinked.map((a) => a.id),
         },
         "awaiting linked to existing transaction",
       );
@@ -1433,6 +1445,7 @@ export default async function apiRoutes(fastify, opts) {
         awaiting_id: awaiting.id,
         transaction_id: txn.id,
         action: "link_existing_txn",
+        also_settles: alsoLinked.map((a) => a.id),
       };
     },
   );

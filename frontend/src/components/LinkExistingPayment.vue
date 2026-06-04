@@ -42,6 +42,26 @@ function shortDate(d) {
   return s.slice(0, 10);
 }
 
+// Other awaitings (besides THIS one) that the candidate txn already
+// settles. Multi-link is allowed — these are informational only.
+function otherLinks(t) {
+  const arr = Array.isArray(t.already_linked_awaitings)
+    ? t.already_linked_awaitings
+    : [];
+  return arr.filter((a) => a.id !== props.awaiting.id);
+}
+function otherLinkedCount(t) {
+  return otherLinks(t).length;
+}
+function otherLinkedTitle(t) {
+  const others = otherLinks(t);
+  if (others.length === 0) return "";
+  return (
+    "Also settles:\n" +
+    others.map((a) => `  • ${a.id} — ${a.vendor || "?"} (${fmt(a.amount)})`).join("\n")
+  );
+}
+
 // Decorate hits with a relevance signal so the user can scan quickly:
 //   - amountDelta: |row.amount - awaiting.amount|
 //   - exact: amountDelta <= $0.01
@@ -155,7 +175,6 @@ onMounted(loadCandidates);
         :class="{
           selected: selectedId === t.id,
           exact: t._exact,
-          'already-linked': t.already_linked,
         }"
         @click="selectedId = t.id"
       >
@@ -173,11 +192,17 @@ onMounted(loadCandidates);
           >
             Δ {{ fmt(t._amount_delta, t.currency) }}
           </span>
+          <!-- One payment can settle multiple invoices (vendor sends
+               two bills, you pay both with one check). Show the
+               existing links as informational context, not as a
+               warning. Excludes THIS awaiting from the tally so we
+               don't show "also pays self" if the user is re-opening
+               the picker after a successful link. -->
           <span
-            v-if="t.already_linked"
-            class="tag tag-conflict"
-            :title="`Already settles awaiting ${t.already_linked_to}`"
-          >already linked</span>
+            v-if="otherLinkedCount(t) > 0"
+            class="tag tag-info"
+            :title="otherLinkedTitle(t)"
+          >also pays {{ otherLinkedCount(t) }} other<span v-if="otherLinkedCount(t) !== 1">s</span></span>
         </div>
         <div class="lep-row-sub">
           <span class="mono">{{ t.id }}</span>
@@ -291,7 +316,7 @@ onMounted(loadCandidates);
   gap: 0.15rem;
 }
 
-.lep-row:hover:not(.already-linked) {
+.lep-row:hover {
   border-color: var(--accent);
   background: #fafaf5;
 }
@@ -303,10 +328,6 @@ onMounted(loadCandidates);
 
 .lep-row.exact {
   border-left: 3px solid var(--ok);
-}
-
-.lep-row.already-linked {
-  opacity: 0.6;
 }
 
 .lep-row-main {
@@ -364,10 +385,10 @@ onMounted(loadCandidates);
   border: 1px solid #fde68a;
 }
 
-.tag-conflict {
-  background: #fef2f2;
-  color: var(--danger);
-  border: 1px solid #fca5a5;
+.tag-info {
+  background: #eff6ff;
+  color: #1d4ed8;
+  border: 1px solid #bfdbfe;
 }
 
 .lep-actions {
