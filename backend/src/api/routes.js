@@ -992,18 +992,12 @@ export default async function apiRoutes(fastify, opts) {
             category: { type: "string", minLength: 1 },
             payment_source: { type: ["string", "null"] },
             reference_number: { type: ["string", "null"] },
-            reference_kind: {
-              type: ["string", "null"],
-              enum: [
-                "invoice",
-                "receipt",
-                "order",
-                "transaction",
-                "confirmation",
-                "other",
-                null,
-              ],
-            },
+            // Free-text string (or null). Was strictly enumerated, but
+            // every new write path (Book-as-new → "statement",
+            // propose_transaction → "check"/"card"/"ach"/etc.) broke
+            // editing for previously-saved rows. The frontend dropdown
+            // remains the UX guardrail.
+            reference_kind: { type: ["string", "null"] },
             description: { type: "string" },
             notes: { type: "string" },
           },

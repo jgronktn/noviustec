@@ -14,12 +14,23 @@ const emit = defineEmits(["success", "cancel"]);
 
 const token = inject("apiToken");
 
+// Comprehensive list of every reference_kind value any flow can write,
+// so a row loaded for editing can find its existing value in the
+// dropdown. The PATCH endpoint accepts any string (the enum was
+// relaxed because every new write path that introduced a kind broke
+// editing). Keep this list in sync as new kinds appear.
 const REFERENCE_KINDS = [
   { value: "", label: "(none)" },
   { value: "invoice", label: "Invoice" },
   { value: "receipt", label: "Receipt" },
   { value: "order", label: "Order" },
-  { value: "transaction", label: "Check / Transaction" },
+  { value: "statement", label: "Statement (reconciliation)" },
+  { value: "check", label: "Check" },
+  { value: "card", label: "Credit card" },
+  { value: "ach", label: "ACH" },
+  { value: "wire", label: "Wire" },
+  { value: "cash", label: "Cash" },
+  { value: "transaction", label: "Transaction (generic)" },
   { value: "confirmation", label: "Confirmation" },
   { value: "other", label: "Other" },
 ];
