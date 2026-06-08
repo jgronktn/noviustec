@@ -79,6 +79,12 @@ export const COLUMNS = {
     { header: "Pending_ID", key: "pending_id", width: 16 },
     { header: "Created_At", key: "created_at", width: 22 },
     { header: "Created_By", key: "created_by", width: 12 }, // "user" | "agent"
+    // ⚠️ APPENDED 2026-06-08 — see schema migration rule at top of file.
+    // "expense" (default; money going out to a vendor) or "income"
+    // (deposit — money coming in: revenue, investor capital, loan
+    // proceeds, refunds received, etc.). Null on legacy rows is
+    // treated as "expense".
+    { header: "Entry_Type", key: "entry_type", width: 10 },
   ],
   [SHEETS.AWAITING]: [
     { header: "ID", key: "id", width: 16 },
@@ -199,6 +205,15 @@ export const DEFAULT_CATEGORIES = [
   { name: "Bank Fees", type: "expense", description: "Flat / punitive charges: late fees, NSF, wires, overdraft", account_code: "", active: true },
   { name: "Interest Expense", type: "expense", description: "Finance charges on revolving card balances and loan interest", account_code: "", active: true },
   { name: "Other / Uncategorized", type: "expense", description: "", account_code: "", active: true },
+  // ── Income categories (deposits) ──────────────────────────────────
+  { name: "Revenue", type: "income", description: "Customer payments for products / services delivered", account_code: "", active: true },
+  { name: "Investor Capital", type: "income", description: "Equity contributions from investors / shareholders", account_code: "", active: true },
+  { name: "Loan Proceeds", type: "income", description: "Money received from a loan (a liability — cash-basis bucket)", account_code: "", active: true },
+  { name: "Interest Income", type: "income", description: "Bank account interest, money market returns, etc.", account_code: "", active: true },
+  { name: "Refund / Reimbursement", type: "income", description: "Vendor refund or customer/partner reimbursement received", account_code: "", active: true },
+  { name: "Tax Refund", type: "income", description: "IRS / state / local tax refund received", account_code: "", active: true },
+  { name: "Grants", type: "income", description: "Government grants, accelerator stipends, prize money", account_code: "", active: true },
+  { name: "Other Income", type: "income", description: "", account_code: "", active: true },
 ];
 
 // Payment sources are NOT auto-seeded — too user-specific. Users add via Excel

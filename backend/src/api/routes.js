@@ -911,6 +911,8 @@ export default async function apiRoutes(fastify, opts) {
             reference_kind: { type: "string" }, // check | card | ach | wire | cash | other
             description: { type: "string" },
             notes: { type: "string" },
+            // "expense" (default — money out) or "income" (deposit).
+            entry_type: { type: "string", enum: ["expense", "income"] },
           },
         },
       },
@@ -942,6 +944,8 @@ export default async function apiRoutes(fastify, opts) {
           reference_number: req.body.reference_number || null,
           reference_kind: req.body.reference_kind || null,
           notes: req.body.notes || "",
+          entry_type:
+            req.body.entry_type === "income" ? "income" : "expense",
           created_by: "agent-proposal",
         });
         req.log.info(
@@ -1003,6 +1007,7 @@ export default async function apiRoutes(fastify, opts) {
             reference_kind: { type: ["string", "null"] },
             description: { type: "string" },
             notes: { type: "string" },
+            entry_type: { type: "string", enum: ["expense", "income"] },
           },
         },
       },
@@ -1349,6 +1354,7 @@ export default async function apiRoutes(fastify, opts) {
           reference_number: r.reference_number,
           reference_kind: r.reference_kind,
           description: r.description,
+          entry_type: r.entry_type === "income" ? "income" : "expense",
           already_linked: links.length > 0,
           already_linked_count: links.length,
           already_linked_awaitings: links,

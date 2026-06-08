@@ -45,6 +45,9 @@ export async function addTransaction(params) {
     pending_id: params.pending_id ?? null,
     created_at: new Date().toISOString(),
     created_by: params.created_by ?? "user",
+    // "expense" (money out) or "income" (deposit). Null on legacy
+    // rows is treated as "expense" by every reader.
+    entry_type: params.entry_type === "income" ? "income" : "expense",
   };
   await withWorkbookWrite(async (wb) => {
     const sheet = wb.getWorksheet(SHEETS.GL);
@@ -69,6 +72,9 @@ const TXN_PATCHABLE_FIELDS = new Set([
   "reference_kind",
   "description",
   "notes",
+  // Toggling a row between expense and income is a legitimate
+  // correction (booking mistake, miscategorization). Patchable.
+  "entry_type",
 ]);
 
 /**

@@ -1,6 +1,7 @@
 <script setup>
 import { computed, ref, inject } from "vue";
 import AddPaymentDialog from "../AddPaymentDialog.vue";
+import AddDepositDialog from "../AddDepositDialog.vue";
 
 const props = defineProps({
   data: { type: Object, required: true },
@@ -11,13 +12,18 @@ const props = defineProps({
 const openEditDialog = inject("openEditDialog", null);
 const signalLedgerChange = inject("signalLedgerChange", () => {});
 
-// Quick "add payment" modal, toggled by the button at the top of the
-// right side. Direct-write — no agent proposal step — for fast manual
-// entry of checks / card charges / etc.
+// Quick-add modals triggered by the buttons in the right-side header.
+// Direct-write (no agent proposal step) for fast manual entry of
+// checks/card charges (payment) or deposits/revenue (deposit).
 const showAddPayment = ref(false);
+const showAddDeposit = ref(false);
 
 function onAddPaymentSuccess() {
   showAddPayment.value = false;
+  signalLedgerChange();
+}
+function onAddDepositSuccess() {
+  showAddDeposit.value = false;
   signalLedgerChange();
 }
 
@@ -137,6 +143,7 @@ function kindLabel(ev) {
   if (kind === "invoice") return "Invoice";
   if (kind === "receipt") return "Receipt";
   if (kind === "payment") return "Payment";
+  if (kind === "deposit") return "Deposit";
   if (kind === "transfer") return "Transfer";
   if (kind === "statement") return "Statement";
   return kind ? kind.charAt(0).toUpperCase() + kind.slice(1) : "—";
@@ -228,15 +235,27 @@ const monthGroups = computed(() => {
         </div>
         <div class="vt-axis vt-axis-spacer" />
         <div class="vt-side vt-right">
-          <div class="vt-total vt-total-right">
-            <span class="vt-total-label">Payments</span>
-            <span class="vt-total-amount">{{ fmt(data.summary.total_right) }}</span>
-            <button
-              class="vt-add-payment"
-              type="button"
-              title="Quick-add a payment (check, card, ACH, wire, cash)"
-              @click="showAddPayment = true"
-            >+ Add payment</button>
+          <div class="vt-total-stack">
+            <div class="vt-total vt-total-right">
+              <span class="vt-total-label">Payments out</span>
+              <span class="vt-total-amount">{{ fmt(data.summary.total_paid ?? data.summary.total_right) }}</span>
+              <button
+                class="vt-add-payment"
+                type="button"
+                title="Quick-add a payment (check, card, ACH, wire, cash)"
+                @click="showAddPayment = true"
+              >+ Add payment</button>
+            </div>
+            <div class="vt-total vt-total-deposits">
+              <span class="vt-total-label">Deposits in</span>
+              <span class="vt-total-amount mono">{{ fmt(data.summary.total_deposits ?? 0) }}</span>
+              <button
+                class="vt-add-deposit"
+                type="button"
+                title="Quick-add a deposit (revenue, investor capital, refund, interest, etc.)"
+                @click="showAddDeposit = true"
+              >+ Add deposit</button>
+            </div>
           </div>
         </div>
       </div>
@@ -319,6 +338,7 @@ const monthGroups = computed(() => {
                 { 'vt-card-clickable': hasLinkedSibling(ev) || canEdit(ev) },
                 { 'vt-card-linked': isLinkedActive(ev) },
                 { 'vt-card-transfer-right': ev.kind === 'transfer' },
+                { 'vt-card-deposit': ev.entry_type === 'income' },
               ]"
               :title="canEdit(ev) ? 'Click to edit' : (ev.description || '')"
               @click="handleCardClick(ev)"
@@ -348,13 +368,18 @@ const monthGroups = computed(() => {
       </section>
     </div>
 
-    <!-- Quick-add payment modal triggered from the right-side header.
-         Lives at the root level so its fixed-position backdrop covers
+    <!-- Quick-add payment / deposit modals triggered from the right-
+         side header. Lives at root so fixed-position backdrops cover
          the whole canvas, not just the timeline. -->
     <AddPaymentDialog
       v-if="showAddPayment"
       @success="onAddPaymentSuccess"
       @cancel="showAddPayment = false"
+    />
+    <AddDepositDialog
+      v-if="showAddDeposit"
+      @success="onAddDepositSuccess"
+      @cancel="showAddDeposit = false"
     />
   </div>
 </template>
@@ -453,13 +478,30 @@ const monthGroups = computed(() => {
   align-self: flex-start;
 }
 
-.vt-add-payment {
+/* Two-stripe right-side totals: Payments out on top, Deposits in
+   below. Each stripe has its own quick-add button. */
+.vt-total-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+
+.vt-total-deposits {
+  align-self: flex-start;
+  border-color: #bbf7d0;
+  background: #f0fdf4;
+}
+
+.vt-total-deposits .vt-total-label {
+  color: var(--ok);
+}
+
+.vt-add-payment,
+.vt-add-deposit {
   margin-top: 0.35rem;
   font-size: 0.7rem;
   padding: 0.3rem 0.6rem;
   background: var(--surface);
-  border: 1px solid var(--accent);
-  color: var(--accent);
   border-radius: 4px;
   cursor: pointer;
   font-weight: 600;
@@ -467,8 +509,23 @@ const monthGroups = computed(() => {
   transition: background 0.15s, color 0.15s;
 }
 
+.vt-add-payment {
+  border: 1px solid var(--accent);
+  color: var(--accent);
+}
+
 .vt-add-payment:hover {
   background: var(--accent);
+  color: white;
+}
+
+.vt-add-deposit {
+  border: 1px solid var(--ok);
+  color: var(--ok);
+}
+
+.vt-add-deposit:hover {
+  background: var(--ok);
   color: white;
 }
 
@@ -744,6 +801,22 @@ const monthGroups = computed(() => {
 
 .vt-card-right.vt-card-transfer-right .vt-card-kind {
   color: #6d28d9;
+}
+
+/* Right-side Deposit card — green to distinguish from blue payments,
+   matches the "Deposits in" total stripe at the top. */
+.vt-card-right.vt-card-deposit {
+  background: #f0fdf4;
+  border-color: #bbf7d0;
+  border-left: 3px solid var(--ok);
+}
+
+.vt-card-right.vt-card-deposit .vt-card-kind {
+  color: var(--ok);
+}
+
+.vt-card-right.vt-card-deposit .vt-card-amount {
+  color: var(--ok);
 }
 
 .vt-card-kind {

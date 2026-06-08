@@ -380,6 +380,11 @@ export async function buildTimelineProps({ vendor = null, from, to } = {}) {
       continue;
     }
 
+    // Income rows (deposits) never get a left-side card — the left
+    // side is for vendor-issued artifacts (invoices/receipts from
+    // someone WE owe money to). A deposit is money coming in; no
+    // vendor invoice corresponds to it.
+    if (r.entry_type === "income") continue;
     // Fallback: no doc rows for this txn (Record-payment with no source
     // PDF, or an old GL row archived before the Documents sheet existed).
     // Skip if the GL row itself has no reference_kind — nothing to show.
@@ -412,21 +417,28 @@ export async function buildTimelineProps({ vendor = null, from, to } = {}) {
     });
   }
 
-  const rightEvents = matchedTxns.map((r) => ({
-    id: r.id,
-    kind: "payment",
-    date: isoDate(r.date),
-    amount: Math.round(Number(r.amount) * 100) / 100,
-    currency: r.currency ?? "USD",
-    reference_number: r.reference_number ?? null,
-    reference_kind: r.reference_kind ?? null,
-    description: r.description ?? "",
-    category: r.category ?? null,
-    payment_source: r.payment_source ?? null,
-    vendor: r.vendor,
-    link_id: r.id,
-    statement_matched: txnIdsMatchedOnStatement.has(r.id),
-  }));
+  const rightEvents = matchedTxns.map((r) => {
+    // Income rows are deposits, not vendor payments; the frontend
+    // colors them green and routes their amount into the "deposits in"
+    // total instead of "payments out". Legacy/null entry_type → expense.
+    const entryType = r.entry_type === "income" ? "income" : "expense";
+    return {
+      id: r.id,
+      kind: entryType === "income" ? "deposit" : "payment",
+      entry_type: entryType,
+      date: isoDate(r.date),
+      amount: Math.round(Number(r.amount) * 100) / 100,
+      currency: r.currency ?? "USD",
+      reference_number: r.reference_number ?? null,
+      reference_kind: r.reference_kind ?? null,
+      description: r.description ?? "",
+      category: r.category ?? null,
+      payment_source: r.payment_source ?? null,
+      vendor: r.vendor,
+      link_id: r.id,
+      statement_matched: txnIdsMatchedOnStatement.has(r.id),
+    };
+  });
 
   // Right-side Transfer cards. For a vendor-filtered timeline only include
   // transfers whose linked awaiting matches the vendor (the awaiting's
@@ -495,8 +507,14 @@ export async function buildTimelineProps({ vendor = null, from, to } = {}) {
   const totalInvoiced = leftEvents
     .filter((e) => e.source === "awaiting" && !e.is_transfer_obligation)
     .reduce((s, e) => s + e.amount, 0);
+  // Split the right-side total into payments-out (expense GL rows)
+  // and deposits-in (income GL rows). Transfer cards are still
+  // excluded from both because they're internal money moves.
   const totalPaid = rightEvents
-    .filter((e) => e.kind !== "transfer")
+    .filter((e) => e.kind !== "transfer" && e.entry_type !== "income")
+    .reduce((s, e) => s + e.amount, 0);
+  const totalDeposits = rightEvents
+    .filter((e) => e.entry_type === "income")
     .reduce((s, e) => s + e.amount, 0);
   // Totals dedupe across overlapping representations of the same money:
   //   - Awaiting card always counts (one per AwaitingPayment row), EXCEPT
@@ -570,6 +588,7 @@ export async function buildTimelineProps({ vendor = null, from, to } = {}) {
     summary: {
       total_invoiced: Math.round(totalInvoiced * 100) / 100,
       total_paid: Math.round(totalPaid * 100) / 100,
+      total_deposits: Math.round(totalDeposits * 100) / 100,
       total_left: Math.round(totalLeft * 100) / 100,
       total_right: Math.round(totalRight * 100) / 100,
       outstanding_balance: Math.round(outstandingBalance * 100) / 100,
