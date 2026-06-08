@@ -472,6 +472,38 @@ export const TOOL_DEFINITIONS = [
     },
   },
   {
+    name: "show_deposit_activity",
+    description:
+      "Render a chronological timeline of deposits (income / money coming in) only — no expense payments, no invoices, no statements. Each card shows source/payer, date, amount, category, and the account it was deposited into. Use this when the user wants to see 'deposit activity', 'show only deposits', 'show me the income', 'deposit timeline'. Distinct from show_vendor_timeline (which shows both expense and income side-by-side) and show_monthly_spend (which is expense by month). Supports optional vendor (source/payer), category, and date-range filters.",
+    input_schema: {
+      type: "object",
+      properties: {
+        vendor: {
+          type: "string",
+          description:
+            "Filter to a single source/payer (case-insensitive substring match — 'stripe' matches 'Stripe Inc').",
+        },
+        category: {
+          type: "string",
+          description:
+            "Filter to a single income category (exact name, e.g. 'Revenue', 'Investor Capital', 'Interest Income').",
+        },
+        from: {
+          type: "string",
+          description: "Inclusive YYYY-MM-DD start. Defaults to trailing 12 months.",
+        },
+        to: {
+          type: "string",
+          description: "Inclusive YYYY-MM-DD end. Defaults to today.",
+        },
+        title: {
+          type: "string",
+          description: "Optional panel title.",
+        },
+      },
+    },
+  },
+  {
     name: "show_inbox_list",
     description:
       "Render a table of all items received in the inbox (receipts that arrived via email or upload). Shows pending, approved, and rejected entries together so the user can see the full history of what's come in. Default returns all statuses, newest first. Cap at 100 rows.",

@@ -1343,6 +1343,130 @@ export async function runTool(name, input) {
       };
     }
 
+    case "show_deposit_activity": {
+      // Produce data in the same shape as buildTimelineProps so the
+      // existing VendorTimelinePanel can render it. Right side gets
+      // ONLY income-typed GL rows ("deposit" cards, green styling).
+      // Left side is empty — deposits don't have vendor-issued
+      // artifacts like invoices/receipts. Totals stripe still shows
+      // "Payments out: $0 · Deposits in: $X" since the panel was
+      // built for that two-stripe display.
+      const today2 = new Date();
+      const defaultTo2 = today2.toISOString().slice(0, 10);
+      const past2 = new Date(
+        Date.UTC(today2.getUTCFullYear(), today2.getUTCMonth() - 11, 1),
+      );
+      const defaultFrom2 = past2.toISOString().slice(0, 10);
+      const from = args.from || defaultFrom2;
+      const to = args.to || defaultTo2;
+
+      let txns = await listTransactions({ from, to });
+      // Income only.
+      txns = txns.filter((r) => r.entry_type === "income");
+      if (args.vendor) {
+        txns = txns.filter((t) => vendorMatches(t.vendor, args.vendor));
+      }
+      if (args.category) {
+        txns = txns.filter((t) => t.category === args.category);
+      }
+
+      const rightEvents = txns.map((r) => ({
+        id: r.id,
+        kind: "deposit",
+        entry_type: "income",
+        date: isoDate(r.date),
+        amount: Math.round(Math.abs(Number(r.amount) || 0) * 100) / 100,
+        currency: r.currency ?? "USD",
+        reference_number: r.reference_number ?? null,
+        reference_kind: r.reference_kind ?? null,
+        description: r.description ?? "",
+        category: r.category ?? null,
+        payment_source: r.payment_source ?? null,
+        vendor: r.vendor,
+        link_id: r.id,
+        statement_matched: false,
+      }));
+
+      // Same date-row builder as buildTimelineProps: group events by
+      // ISO date so VendorTimelinePanel's existing layout works.
+      const dateSet = new Set(
+        rightEvents.map((e) => e.date).filter(Boolean),
+      );
+      const sortedDates = [...dateSet].sort().reverse();
+      const rows = sortedDates.map((d) => ({
+        date: d,
+        left: [],
+        right: rightEvents.filter((e) => e.date === d),
+      }));
+
+      const totalDeposits = rightEvents.reduce(
+        (s, e) => s + (e.amount ?? 0),
+        0,
+      );
+      const distinctSources = new Set(rightEvents.map((e) => e.vendor)).size;
+
+      const filterParts = [];
+      if (args.vendor) filterParts.push(`vendor=${args.vendor}`);
+      if (args.category) filterParts.push(`category=${args.category}`);
+      if (args.from) filterParts.push(`from ${args.from}`);
+      if (args.to) filterParts.push(`through ${args.to}`);
+      const filterDesc = filterParts.join(" · ");
+      const title =
+        args.title ??
+        (filterDesc ? `Deposit activity · ${filterDesc}` : "Deposit activity");
+
+      const agentEntries = rightEvents
+        .slice(0, 50)
+        .map((e) => ({
+          id: e.id,
+          date: e.date,
+          vendor: e.vendor,
+          amount: e.amount,
+          category: e.category,
+          payment_source: e.payment_source,
+        }));
+
+      const today3 = new Date().toISOString().slice(0, 10);
+
+      return {
+        __panel: {
+          kind: "deposit_activity",
+          title,
+          props: {
+            vendor: "Deposit activity",
+            query: null,
+            is_global: true,
+            period: { from, to },
+            rows,
+            summary: {
+              // total_paid stays at zero on this filtered view; the
+              // panel's "Payments out" stripe renders $0 explicitly
+              // rather than getting hidden, since seeing both stripes
+              // keeps the income vs expense framing intact.
+              total_invoiced: 0,
+              total_paid: 0,
+              total_deposits: Math.round(totalDeposits * 100) / 100,
+              total_left: 0,
+              total_right: Math.round(totalDeposits * 100) / 100,
+              outstanding_balance: 0,
+              invoice_count: 0,
+              payment_count: 0,
+              deposit_count: rightEvents.length,
+              awaiting_count: 0,
+              overdue_count: 0,
+              distinct_vendors: distinctSources,
+              outstanding_invoices: [],
+              overdue_days_threshold: TIMELINE_OVERDUE_DAYS,
+              as_of: today3,
+            },
+          },
+        },
+        count: rightEvents.length,
+        total_deposits: Math.round(totalDeposits * 100) / 100,
+        entries: agentEntries,
+      };
+    }
+
     case "show_statement_timeline": {
       // Produce data in the SAME shape as buildTimelineProps so the
       // existing VendorTimelinePanel can render it. The only thing that

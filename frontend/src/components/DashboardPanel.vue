@@ -45,6 +45,10 @@ const KIND_TO_COMPONENT = {
   // events in vendor-timeline shape (card balances on the left,
   // bank statements on the right).
   statement_timeline: VendorTimelinePanel,
+  // Deposit-only timeline reuses the same template — handler emits
+  // events in vendor-timeline shape with empty left, income-only
+  // right cards (green DEPOSIT styling).
+  deposit_activity: VendorTimelinePanel,
   statements_list: StatementsListPanel,
   reconciliation: ReconciliationPanel,
   transaction_draft: TransactionDraftPanel,
