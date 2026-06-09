@@ -247,7 +247,7 @@ const monthGroups = computed(() => {
               >+ Add payment</button>
             </div>
             <div class="vt-total vt-total-deposits">
-              <span class="vt-total-label">Deposits in</span>
+              <span class="vt-total-label">Income</span>
               <span class="vt-total-amount mono">{{ fmt(data.summary.total_deposits ?? 0) }}</span>
               <button
                 class="vt-add-deposit"
@@ -478,12 +478,15 @@ const monthGroups = computed(() => {
   align-self: flex-start;
 }
 
-/* Two-stripe right-side totals: Payments out on top, Deposits in
-   below. Each stripe has its own quick-add button. */
+/* Two-stripe right-side totals: Payments out on the left, Income on
+   the right, side-by-side on the same horizontal plane. Each stripe
+   has its own quick-add button. */
 .vt-total-stack {
   display: flex;
-  flex-direction: column;
-  gap: 0.4rem;
+  flex-direction: row;
+  align-items: flex-start;
+  gap: 0.5rem;
+  flex-wrap: wrap;
 }
 
 .vt-total-deposits {
