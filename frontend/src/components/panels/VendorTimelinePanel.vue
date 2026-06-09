@@ -492,13 +492,24 @@ const monthGroups = computed(() => {
 
 /* Two-stripe right-side totals: Payments out on the left, Income on
    the right, side-by-side on the same horizontal plane. Each stripe
-   has its own quick-add button. */
+   has its own quick-add button. align-items: stretch makes all three
+   cards take the height of the tallest, and the margin-top: auto
+   rule below aligns each card's bottom element (button or note) on
+   the same horizontal line. */
 .vt-total-stack {
   display: flex;
   flex-direction: row;
-  align-items: flex-start;
+  align-items: stretch;
   gap: 0.5rem;
   flex-wrap: wrap;
+}
+
+/* In the right-side totals row only, force the last child of each
+   card (the + Add button or the cash note) to the bottom of the
+   card so they line up across cards. Scoped to vt-total-stack so
+   the left-side total isn't affected. */
+.vt-total-stack > .vt-total > *:last-child {
+  margin-top: auto;
 }
 
 .vt-total-deposits {
@@ -541,10 +552,12 @@ const monthGroups = computed(() => {
 }
 
 .vt-cash-note {
-  font-size: 0.62rem;
+  font-size: 0.7rem;
   color: var(--text-muted);
   font-style: italic;
-  margin-top: 0.15rem;
+  /* Match the vertical padding of the + Add buttons so the bottom
+     edge sits on the same horizontal line. */
+  padding: 0.3rem 0;
 }
 
 .vt-add-payment,
