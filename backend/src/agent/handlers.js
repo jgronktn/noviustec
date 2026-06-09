@@ -659,6 +659,9 @@ export async function buildTimelineProps({ vendor = null, from, to } = {}) {
       total_invoiced: Math.round(totalInvoiced * 100) / 100,
       total_paid: Math.round(totalPaid * 100) / 100,
       total_deposits: Math.round(totalDeposits * 100) / 100,
+      // Net cash flow over the period: income minus expenses.
+      // Positive = money came in net, negative = money went out net.
+      total_cash: Math.round((totalDeposits - totalPaid) * 100) / 100,
       total_left: Math.round(totalLeft * 100) / 100,
       total_right: Math.round(totalRight * 100) / 100,
       outstanding_balance: Math.round(outstandingBalance * 100) / 100,

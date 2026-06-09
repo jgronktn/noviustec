@@ -256,6 +256,17 @@ const monthGroups = computed(() => {
                 @click="showAddDeposit = true"
               >+ Add deposit</button>
             </div>
+            <div
+              class="vt-total vt-total-cash"
+              :class="{
+                'vt-cash-positive': (data.summary.total_cash ?? 0) > 0,
+                'vt-cash-negative': (data.summary.total_cash ?? 0) < 0,
+              }"
+            >
+              <span class="vt-total-label">Cash</span>
+              <span class="vt-total-amount mono">{{ fmt(data.summary.total_cash ?? 0) }}</span>
+              <span class="vt-cash-note">Income − Payments out</span>
+            </div>
           </div>
         </div>
       </div>
@@ -498,6 +509,42 @@ const monthGroups = computed(() => {
 
 .vt-total-deposits .vt-total-label {
   color: var(--ok);
+}
+
+/* Net cash flow card — positive (green tint), negative (red tint),
+   or neutral (gray when zero). Sits at the right edge of the totals
+   row as a quick-glance "did we make or lose money this period". */
+.vt-total-cash {
+  align-self: flex-start;
+  border-color: var(--border);
+  background: var(--surface);
+}
+
+.vt-total-cash.vt-cash-positive {
+  border-color: #bbf7d0;
+  background: #ecfdf5;
+}
+
+.vt-total-cash.vt-cash-positive .vt-total-label,
+.vt-total-cash.vt-cash-positive .vt-total-amount {
+  color: var(--ok);
+}
+
+.vt-total-cash.vt-cash-negative {
+  border-color: #fecaca;
+  background: #fef2f2;
+}
+
+.vt-total-cash.vt-cash-negative .vt-total-label,
+.vt-total-cash.vt-cash-negative .vt-total-amount {
+  color: var(--danger);
+}
+
+.vt-cash-note {
+  font-size: 0.62rem;
+  color: var(--text-muted);
+  font-style: italic;
+  margin-top: 0.15rem;
 }
 
 .vt-add-payment,
