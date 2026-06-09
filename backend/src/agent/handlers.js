@@ -485,6 +485,70 @@ export async function buildTimelineProps({ vendor = null, from, to } = {}) {
     });
   }
 
+  // ── Bank statements as right-side informational cards ────────────
+  // Only on the global timeline (vendor === null). Statements have no
+  // vendor, so they'd never show up under a vendor filter anyway.
+  // They're informational — never count toward Payments out / Income
+  // totals or payment_count / deposit_count.
+  if (!vendor) {
+    const allStmts = await listStatements({ status: "all" });
+    const sources = await getPaymentSources({ activeOnly: false });
+    const last4Of = (s) => {
+      if (!s) return null;
+      const m = String(s).match(/(?:••?|\*\*|-)\s*(\d{4})\b/);
+      return m ? m[1] : null;
+    };
+    const SPECIFIC = new Set(["credit_card", "bank_account"]);
+    function isBank(stmt) {
+      // Resolve via the same backfill heuristic used by
+      // show_statement_timeline so legacy statements without a
+      // source_kind still classify correctly.
+      const declared = stmt.source_kind;
+      if (SPECIFIC.has(declared)) return declared === "bank_account";
+      const exact = sources.find((s) => s.name === stmt.source);
+      if (exact?.type && SPECIFIC.has(exact.type)) {
+        return exact.type === "bank_account";
+      }
+      const stmtLast4 = last4Of(stmt.source);
+      if (stmtLast4) {
+        const byLast4 = sources.find(
+          (s) => last4Of(s.name) === stmtLast4 && SPECIFIC.has(s.type),
+        );
+        if (byLast4) return byLast4.type === "bank_account";
+      }
+      const lower = String(stmt.source || "").toLowerCase();
+      if (/\b(banking|bank account|checking|savings)\b/.test(lower)) {
+        return true;
+      }
+      return false;
+    }
+    for (const stmt of allStmts) {
+      if (!isBank(stmt)) continue;
+      const date = isoDate(stmt.statement_date) || isoDate(stmt.period_end);
+      if (!date) continue;
+      if (from && date < from) continue;
+      if (to && date > to) continue;
+      rightEvents.push({
+        id: stmt.id,
+        kind: "statement",
+        date,
+        amount:
+          stmt.closing_balance == null
+            ? 0
+            : Math.round(Math.abs(Number(stmt.closing_balance)) * 100) / 100,
+        currency: stmt.currency ?? "USD",
+        reference_number: stmt.original_filename || stmt.id,
+        reference_kind: "statement",
+        description: `${isoDate(stmt.period_start) ?? "?"} → ${isoDate(stmt.period_end) ?? "?"}`,
+        category: null,
+        payment_source: stmt.source,
+        vendor: stmt.source,
+        link_id: stmt.id,
+        statement_matched: stmt.status === "reconciled",
+      });
+    }
+  }
+
   const dateSet = new Set([
     ...leftEvents.map((e) => e.date).filter(Boolean),
     ...rightEvents.map((e) => e.date).filter(Boolean),
@@ -508,10 +572,16 @@ export async function buildTimelineProps({ vendor = null, from, to } = {}) {
     .filter((e) => e.source === "awaiting" && !e.is_transfer_obligation)
     .reduce((s, e) => s + e.amount, 0);
   // Split the right-side total into payments-out (expense GL rows)
-  // and deposits-in (income GL rows). Transfer cards are still
-  // excluded from both because they're internal money moves.
+  // and deposits-in (income GL rows). Transfer and Statement cards
+  // are excluded from both — transfers because they're internal
+  // money moves, statements because they're informational only.
   const totalPaid = rightEvents
-    .filter((e) => e.kind !== "transfer" && e.entry_type !== "income")
+    .filter(
+      (e) =>
+        e.kind !== "transfer" &&
+        e.kind !== "statement" &&
+        e.entry_type !== "income",
+    )
     .reduce((s, e) => s + e.amount, 0);
   const totalDeposits = rightEvents
     .filter((e) => e.entry_type === "income")
@@ -599,7 +669,16 @@ export async function buildTimelineProps({ vendor = null, from, to } = {}) {
       invoice_count: leftEvents.filter(
         (e) => e.source === "awaiting" && !e.is_transfer_obligation,
       ).length,
-      payment_count: rightEvents.filter((e) => e.kind !== "transfer").length,
+      payment_count: rightEvents.filter(
+        (e) =>
+          e.kind !== "transfer" &&
+          e.kind !== "statement" &&
+          e.entry_type !== "income",
+      ).length,
+      deposit_count: rightEvents.filter((e) => e.entry_type === "income")
+        .length,
+      statement_count: rightEvents.filter((e) => e.kind === "statement")
+        .length,
       awaiting_count: leftEvents.filter(
         (e) => e.status === "awaiting" && !e.is_transfer_obligation,
       ).length,

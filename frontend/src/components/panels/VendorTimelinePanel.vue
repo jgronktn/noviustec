@@ -339,6 +339,7 @@ const monthGroups = computed(() => {
                 { 'vt-card-linked': isLinkedActive(ev) },
                 { 'vt-card-transfer-right': ev.kind === 'transfer' },
                 { 'vt-card-deposit': ev.entry_type === 'income' },
+                { 'vt-card-statement-right': ev.kind === 'statement' },
               ]"
               :title="canEdit(ev) ? 'Click to edit' : (ev.description || '')"
               @click="handleCardClick(ev)"
@@ -820,6 +821,24 @@ const monthGroups = computed(() => {
 
 .vt-card-right.vt-card-deposit .vt-card-amount {
   color: var(--ok);
+}
+
+/* Right-side Statement card — neutral gray styling so bank
+   statements are informational and don't blend with blue payment
+   cards or green deposit cards. */
+.vt-card-right.vt-card-statement-right {
+  background: #f8f8f4;
+  border-color: #e5e7eb;
+  border-left: 3px solid #9ca3af;
+}
+
+.vt-card-right.vt-card-statement-right .vt-card-kind {
+  color: #4b5563;
+}
+
+.vt-card-right.vt-card-statement-right .vt-card-amount {
+  color: #4b5563;
+  font-weight: 500;
 }
 
 .vt-card-kind {
