@@ -24,7 +24,30 @@ Output rules:
 - "vendor.raw_text": verbatim text near the merchant name, helpful for disambiguation.
 - "date": transaction date in ISO YYYY-MM-DD format. Null if not visible.
 - "total": the FINAL amount charged to the card or bank account, including any tax AND any tip (handwritten or printed). On a credit-card receipt where the printed "Total" line shows the pre-tip amount and a tip is written below it, you MUST add the tip into "total" yourself — the bookkeeping system needs to match the actual charge that hits the bank statement, not just the printed total. Use major units (12.34 for $12.34). Currency in ISO 4217 (USD, EUR, GBP, etc.).
-- "reference_number": if the document prints an invoice number, receipt number, order number, transaction ID, check number, or confirmation code, populate {"value": "<verbatim string>", "kind": "<one of invoice/receipt/order/transaction/confirmation/other>"}. Examples: a vendor PDF labeled "Invoice #149011494" → {"value": "149011494", "kind": "invoice"}; a register receipt with "Ref: A3F9B2" → {"value": "A3F9B2", "kind": "receipt"}; an Uber email with "Trip ID: 12345-abc" → {"value": "12345-abc", "kind": "transaction"}; a bank "Payment Details" page for check #1234 → {"value": "1234", "kind": "confirmation"}. Prefer the more specific kind when the label is explicit (the printed word "Invoice" → "invoice"; "Receipt" → "receipt"; bank "Payment Details" / check posting → "confirmation"). Use "other" only when none fit. Null if no reference number is visible.
+- "reference_number": if the document prints an invoice number, receipt number, order number, transaction ID, check number, or confirmation code, populate {"value": "<verbatim string>", "kind": "<one of invoice/receipt/order/transaction/confirmation/other>"}.
+
+  IMPORTANT — kind reflects what kind of DOCUMENT this is, NOT what the document happens to reference. A receipt that mentions an invoice number is still a RECEIPT (kind: "receipt"), not an invoice. Use this precedence to pick the kind:
+
+    1. If the document is clearly a RECEIPT — labeled "Receipt", "Payment Receipt", "Order Receipt"; shows "Paid", "Paid in Full", "Payment Successful", "Thank you for your payment"; has a register-tape format with the payment already settled; or comes AFTER payment as a confirmation of money already moved — then kind = "receipt", regardless of whether the document also cites an invoice number, order number, or other reference. Use the receipt number itself as the value when visible; fall back to the cited invoice/order number only if no receipt number is printed. Note this in "notes" if you fell back.
+
+    2. If the document is clearly an INVOICE — labeled "Invoice" with no payment confirmation; shows "Amount Due", "Due By", "Please remit"; is a bill being delivered to us asking for future payment — then kind = "invoice".
+
+    3. If the document is an order confirmation that hasn't been paid/shipped yet, kind = "order".
+
+    4. Bank "Payment Details" / check posting / ACH confirmation → kind = "confirmation".
+
+    5. Generic transaction id (Uber trip, card auth code, etc.) when none of the above fit → kind = "transaction".
+
+    6. Use "other" only when none fit.
+
+  Examples — note the precedence:
+    - Vendor PDF clearly labeled "Invoice #149011494" with "Amount Due" → {"value": "149011494", "kind": "invoice"}
+    - Anthropic Receipt PDF that says "Receipt" at top, "Paid", AND cites "Invoice #INV-ABC" — {"value": "<receipt number>", "kind": "receipt"}. Only use the invoice number if no separate receipt number is printed, and say so in notes.
+    - Register receipt with "Ref: A3F9B2" → {"value": "A3F9B2", "kind": "receipt"}
+    - Uber email with "Trip ID: 12345-abc" → {"value": "12345-abc", "kind": "transaction"}
+    - Bank "Payment Details" page for check #1234 → {"value": "1234", "kind": "confirmation"}
+
+  Null if no reference number is visible.
 - "line_items": individual line items where visible. Leave empty array if the receipt only shows a total. Each item has description, amount, and an optional per-item category from the provided list.
 - "suggested_category": best-fit category from the provided list for the OVERALL transaction. Use the exact provided string. Null if you cannot confidently pick one.
 - "suggested_payment_source": best-fit payment source from the provided list, based on visible card last-4, card brand, account info, or context. Use the exact provided string. Null if not determinable.
